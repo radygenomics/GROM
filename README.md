@@ -15,9 +15,9 @@ GROM outputs variant predictions in VCF-format.  Translocations are output to a 
 
 GROM utilizes SAMtools (version 1.3.1 included with the GROM distribution) for accessing BAM files.  GROM has been successfully compiled and tested with:
 
--CentOS 6.8; gcc 4.4.7
--Ubuntu 14.04; gcc 4.4.8
--Ubuntu 14.04; gcc 6.3
+- CentOS 6.8; gcc 4.4.7
+- Ubuntu 14.04; gcc 4.4.8
+- Ubuntu 14.04; gcc 6.3
 
 
 
