@@ -1,0 +1,39 @@
+##fileformat=VCFv4.2
+##fileDate=201758
+##reference=/g2/home/ssmin/GROM_release_versions/GROM-v1.0.0_test/test_data/oreNil2_GL831235-1.fa
+##ALT=<ID=DEL,Description="Deletion">
+##ALT=<ID=DUP,Description="Duplication">
+##ALT=<ID=INS,Description="Insertion">
+##ALT=<ID=INV,Description="Inversion">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End position of the structural variant">
+##FORMAT=<ID=SPR,Number=1,Type=Float,Description="Probability of start breakpoint evidence occurring by chance">
+##FORMAT=<ID=EPR,Number=1,Type=Float,Description="Probability of end breakpoint evidence occurring by chance">
+##FORMAT=<ID=SEV,Number=1,Type=Integer,Description="Evidence supporting variant at start breakpoint">
+##FORMAT=<ID=EEV,Number=1,Type=Integer,Description="Evidence supporting variant at end breakpoint">
+##FORMAT=<ID=SRD,Number=1,Type=Integer,Description="Physical read depth at start breakpoint">
+##FORMAT=<ID=ERD,Number=1,Type=Integer,Description="Physical read depth at end breakpoint">
+##FORMAT=<ID=SCO,Number=1,Type=Integer,Description="Concordant pairs at start breakpoint">
+##FORMAT=<ID=ECO,Number=1,Type=Integer,Description="Concordant pairs at end breakpoint">
+##FORMAT=<ID=SOT,Number=1,Type=Integer,Description="Count of distinct SVs with evidence at start breakpoint">
+##FORMAT=<ID=EOT,Number=1,Type=Integer,Description="Count of distinct SVs with evidence at end breakpoint">
+##FORMAT=<ID=SSC,Number=1,Type=Integer,Description="Soft-clipped reads at start breakpoint">
+##FORMAT=<ID=ESC,Number=1,Type=Integer,Description="Soft-clipped at end breakpoint">
+##FORMAT=<ID=SFR,Number=1,Type=Integer,Description="Position of first read supporting start breakpoint">
+##FORMAT=<ID=SLR,Number=1,Type=Integer,Description="Position of last read supporting start breakpoint">
+##FORMAT=<ID=EFR,Number=1,Type=Integer,Description="Position of first read supporting end breakpoint">
+##FORMAT=<ID=ELR,Number=1,Type=Integer,Description="Position of last read supporting end breakpoint">
+##FORMAT=<ID=AF,Number=1,Type=Float,Description="Allele frequency (high mapping quality reads)">
+##FORMAT=<ID=PR,Number=1,Type=Float,Description="Probability of SNV evidence occurring by chance">
+##FORMAT=<ID=A,Number=1,Type=Integer,Description="A nucleotides (high mapping quality reads)">
+##FORMAT=<ID=C,Number=1,Type=Integer,Description="C nucleotides (high mapping quality reads)">
+##FORMAT=<ID=G,Number=1,Type=Integer,Description="G nucleotides (high mapping quality reads)">
+##FORMAT=<ID=T,Number=1,Type=Integer,Description="T nucleotides (high mapping quality reads)">
+##FORMAT=<ID=AL,Number=1,Type=Integer,Description="A nucleotides (low mapping quality reads)">
+##FORMAT=<ID=CL,Number=1,Type=Integer,Description="C nucleotides (low mapping quality reads)">
+##FORMAT=<ID=GL,Number=1,Type=Integer,Description="G nucleotides (low mapping quality reads)">
+##FORMAT=<ID=TL,Number=1,Type=Integer,Description="T nucleotides (low mapping quality reads)">
+##FORMAT=<ID=BQ,Number=1,Type=Float,Description="Average base quality (all reads)">
+##FORMAT=<ID=MQ,Number=1,Type=Float,Description="Average mapping quality (all reads)">
+##FORMAT=<ID=PIR,Number=1,Type=Float,Description="Average distance of SNV from DNA fragment end)">
+##FORMAT=<ID=FS,Number=1,Type=Integer,Description="SNV reads mapped to forward strand)">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT
