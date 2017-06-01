@@ -1,3 +1,20 @@
+/*
+ *
+ * Copyright (c) 2017, Sean Smith <ss1917@camden.rutgers.edu> and Andrey Grigoriev <andrey.grigoriev@rutgers.edu>
+ *
+ * This program is distributed under those terms in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+ * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License v2 for more details.
+ *
+ * This program is available as free software solely for research and educational purposes: The code of this program 
+ * can be redistributed it and/or modified only for those purposes and under the terms of the GPL2 as published by 
+ * the Free Software Foundation. All rights are reserved with respect to commercial applications of this program.
+ * Please contact Andrey Grigoriev <andrey.grigoriev@rutgers.edu> for additional details.
+ * 
+ * You should have received a copy of the GNU General Public License v2
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
 
 
 
@@ -32,7 +49,7 @@
 
 
 
-static int ix, ccount = 0;
+
 #ifdef DO_TIMING
 static double timers[11+2*max_chr_names];  
 
@@ -256,6 +273,8 @@ double g_range_mult = 0.75;
 
 int g_sv_list_len = 1000000;  
 int g_sv_list2_len = 100000;  
+int g_sv_list_len_over = 0;  
+int g_sv_list2_len_over = 0;  
 
 int g_overlap_mult = 1;  
 
@@ -288,8 +307,8 @@ int g_tumor_sv_type_max_name_len = 10;
 char *g_tumor_separator = "\t";
 char *g_aux_separator = ",";  
 
-int g_sv_types_len = 11;
-char g_sv_types[11][10] = {"DEL", "DUP", "INS", "INV", "INDEL_INS", "INDEL_DEL", "CTX_F", "CTX_R", "INV_F", "INV_R", "SNV"};
+int g_sv_types_len = 13;
+char g_sv_types[13][10] = {"DEL", "DUP", "INS", "INV", "INDEL_INS", "INDEL_DEL", "CTX_F", "CTX_R", "INV_F", "INV_R", "SNV", "DEL RD", "DUP RD"};
 
 int g_normal_sc_range = 3;
 
@@ -767,6 +786,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       printf("cdp_chr_fasta_len is %ld\n", cdp_chr_fasta_len);
     }
     
+    
 #ifdef DO_TIMING
     unsigned long long start_t;  
     unsigned long long end_t;  
@@ -794,6 +814,9 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     int cdp_base_index;  
     
     int cdp_72_loop_start, cdp_72_loop_end;  
+    
+    char cdp_ctx_string[4] = "ctx";  
+
     
     int cdp_snv_cn = 0;  
     int cdp_snv_gt_string_len = 100;
@@ -1267,6 +1290,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       {
 	printf("cdp_bam_name, cdp_bam_name_len, cdp_chr_name, cdp_chr_name_len %s %d %s %d\n", cdp_bam_name, cdp_bam_name_len, cdp_chr_name, cdp_chr_name_len);  
       }
+      
       if( cdp_bam_name_len == cdp_chr_name_len && strncmp(cdp_bam_name, cdp_chr_name, cdp_chr_name_len) == 0 )  
       {
 	cdp_chr_match = cdp_a_loop;
@@ -1315,12 +1339,14 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     
     
     
+    
 
     
     g_tumor_chr_start = -1;
     g_tumor_chr_end = -1;
     if( g_normal == 1 )
     {
+      
       for(caf_a_loop=0;caf_a_loop<g_tumor_sv_index;caf_a_loop++)
       {
 	caf_target_name = g_tumor_sv_chr_list[caf_a_loop];
@@ -1329,6 +1355,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	{
 	  caf_bam_name[caf_int_a] = tolower(caf_target_name[caf_int_a]);
 	}
+	
 	if( caf_bam_name_len == cdp_chr_name_len && strncmp(caf_bam_name, cdp_chr_name, cdp_chr_name_len) == 0 )  
 	{
 	  if( g_tumor_chr_start == -1 )
@@ -1383,11 +1410,11 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	}
 	
       }
-      if( g_tumor_chr_start == - 1 )
-      {
-	cdp_chr_match = -1;  
-	
-      }
+      
+      
+
+
+  
     }
     
     
@@ -1415,6 +1442,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     {
       printf("cdp_tumor_len %d\n", cdp_tumor_len);
     }
+    printf("cdp_tumor_len %d\n", cdp_tumor_len);  
 
     int *cdp_tumor_type = malloc(cdp_tumor_len * sizeof(int));
     if( cdp_tumor_type == NULL )  
@@ -1567,6 +1595,20 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       printf("34 NULL\n");
       exit(0);
     }
+    
+    double *cdp_tumor_start_hez_binom_cdf = malloc(cdp_tumor_len * sizeof(double));
+    if( cdp_tumor_start_hez_binom_cdf == NULL )  
+    {
+      printf("34-2 NULL\n");
+      exit(0);
+    }
+    double *cdp_tumor_end_hez_binom_cdf = malloc(cdp_tumor_len * sizeof(double));
+    if( cdp_tumor_end_hez_binom_cdf == NULL )  
+    {
+      printf("34-3 NULL\n");
+      exit(0);
+    }
+    
     
     
     char *cdp_tumor_snv_base = malloc(cdp_tumor_len * sizeof(char));
@@ -1743,7 +1785,26 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       
       char *cdp_tumor_sv_file_name_ctx = malloc(strlen(cdp_tumor_sv_file_name) + 4 + 1);
       strcpy(cdp_tumor_sv_file_name_ctx, cdp_tumor_sv_file_name);
-      strcpy(cdp_tumor_sv_file_name_ctx, ".ctx");
+
+      
+      if( strlen(cdp_tumor_sv_file_name) > 4 && cdp_tumor_sv_file_name[strlen(cdp_tumor_sv_file_name)-4] == '.' && cdp_tumor_sv_file_name[strlen(cdp_tumor_sv_file_name)-3] == 'v' && cdp_tumor_sv_file_name[strlen(cdp_tumor_sv_file_name)-2] == 'c' && cdp_tumor_sv_file_name[strlen(cdp_tumor_sv_file_name)-1] == 'f' )
+      {
+	sprintf(cdp_tumor_sv_file_name_ctx, "%s.%s", cdp_tumor_sv_file_name, cdp_ctx_string);
+	cdp_tumor_sv_file_name_ctx[strlen(cdp_tumor_sv_file_name)-3] = 'c';
+	cdp_tumor_sv_file_name_ctx[strlen(cdp_tumor_sv_file_name)-2] = 't';
+	cdp_tumor_sv_file_name_ctx[strlen(cdp_tumor_sv_file_name)-1] = 'x';
+	cdp_tumor_sv_file_name_ctx[strlen(cdp_tumor_sv_file_name)+1] = 'v';
+	cdp_tumor_sv_file_name_ctx[strlen(cdp_tumor_sv_file_name)+2] = 'c';
+	cdp_tumor_sv_file_name_ctx[strlen(cdp_tumor_sv_file_name)+3] = 'f';
+      }
+      else
+      {
+	sprintf(cdp_tumor_sv_file_name_ctx, "%s.%s", cdp_tumor_sv_file_name, cdp_ctx_string);
+      }
+      
+      
+      
+      
 #ifdef DO_PRINT    
       printf("ctx file %s\n", cdp_tumor_sv_file_name_ctx);
 #endif      
@@ -1776,11 +1837,12 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	  {
 	    if( strcmp(cdp_tumor_str, g_sv_types[cdp_a_loop]) == 0 )
 	    {
-	      cdp_tumor_type[cdp_tumor_chr_len] = cdp_a_loop;
+	      cdp_tumor_type[cdp_tumor_chr_len] = cdp_a_loop;  
+	      break;  
 	    }
 	  }
   
-	  cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	  cdp_tumor_str = strtok(NULL, g_tumor_separator);  
   
 	  if( strcmp(cdp_tumor_str, cdp_chr_name) == 0 )
   
@@ -1788,14 +1850,16 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
   
 	    if( cdp_tumor_type[cdp_tumor_chr_len] == 6 || cdp_tumor_type[cdp_tumor_chr_len] == 7 )  
 	    {
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_start2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
 	      cdp_tumor_end[cdp_tumor_chr_len] = cdp_tumor_start[cdp_tumor_chr_len];
 	      cdp_tumor_end2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
 	      cdp_tumor_end_binom_cdf[cdp_tumor_chr_len] = cdp_tumor_start_binom_cdf[cdp_tumor_chr_len];
 	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
@@ -1804,13 +1868,13 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
 	      cdp_tumor_end_rd[cdp_tumor_chr_len] = cdp_tumor_start_rd[cdp_tumor_chr_len];  
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_conc[cdp_tumor_chr_len] = cdp_tumor_start_conc[cdp_tumor_chr_len];
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_other_len[cdp_tumor_chr_len] = cdp_tumor_start_other_len[cdp_tumor_chr_len];
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_mchr[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
   
   
@@ -1821,14 +1885,19 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
   
   
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_mpos[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_read_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_read_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_read_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_read_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
+	      
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_start_hez_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
+	      cdp_tumor_end_hez_binom_cdf[cdp_tumor_chr_len] = cdp_tumor_start_hez_binom_cdf[cdp_tumor_chr_len];
+	      
 	      
 	      
 	      cdp_tumor_snv_base[cdp_tumor_chr_len] = '-';
@@ -1859,65 +1928,66 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	    
 	    else if( cdp_tumor_type[cdp_tumor_chr_len] == SNV )
 	    {
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_start2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
 	      cdp_tumor_end[cdp_tumor_chr_len] = cdp_tumor_start[cdp_tumor_chr_len];
 	      cdp_tumor_end2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_snv_base[cdp_tumor_chr_len] = cdp_tumor_str[0];
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_snv_ratio[cdp_tumor_chr_len] = atof(cdp_tumor_str);  
 	      
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
 	      
 	      for(cdp_a_loop=0;cdp_a_loop<g_nucleotides;cdp_a_loop++)
 	      {
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 		cdp_tumor_snv[cdp_a_loop][cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
 	      }
 	      
 	      for(cdp_a_loop=0;cdp_a_loop<g_nucleotides;cdp_a_loop++)
 	      {
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 		cdp_tumor_snv_lowmq[cdp_a_loop][cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
 	      }
 	      
 	      
 	      
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_snv_bq[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_snv_bq_all[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_snv_mq[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_snv_mq_all[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_snv_bq_read_count[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_snv_mq_read_count[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_snv_read_count_all[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      
 
 	      
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_snv_pos_in_read[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_snv_fstrand[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      
 	      
 	      
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
-	      cdp_tumor_snv_start_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
-	      cdp_tumor_snv_start_hez_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
+	      
+	      
+
+
+	      
 	      
 
 	      cdp_tumor_start_binom_cdf[cdp_tumor_chr_len] = 0;
@@ -1939,40 +2009,40 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	    
 	    else if( cdp_tumor_type[cdp_tumor_chr_len] == INDEL_DEL )
 	    {
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_start2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end2[cdp_tumor_chr_len][0] = cdp_tumor_end[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_dist[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_indel[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_indel[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_sc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_sc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      
 	      
@@ -2002,36 +2072,36 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	    }
 	    else if( cdp_tumor_type[cdp_tumor_chr_len] == INDEL_INS )
 	    {
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_start2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end2[cdp_tumor_chr_len][0] = cdp_tumor_end[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_dist[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_indel[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_indel[cdp_tumor_chr_len] = cdp_tumor_start_indel[cdp_tumor_chr_len];
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_rd[cdp_tumor_chr_len] = cdp_tumor_start_rd[cdp_tumor_chr_len];
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_sc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_sc[cdp_tumor_chr_len] = cdp_tumor_start_sc[cdp_tumor_chr_len];
 	      
@@ -2061,24 +2131,25 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      
 	    }
 	    
-	    else
+	    else if( cdp_tumor_type[cdp_tumor_chr_len] < 11 )  
+	    
 	    {
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_start2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end2[cdp_tumor_chr_len][0] = cdp_tumor_end[cdp_tumor_chr_len];  
   
-	      if( cdp_tumor_type[cdp_tumor_chr_len] != 2 )
+	      if( cdp_tumor_type[cdp_tumor_chr_len] != 2 )  
 	      {
 		cdp_tumor_str = strtok(NULL, g_tumor_separator);
-		cdp_tumor_dist[cdp_tumor_chr_len] = atof(cdp_tumor_str);
+		cdp_tumor_dist[cdp_tumor_chr_len] = atof(cdp_tumor_str);  
 	      }
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
 	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_sv_evidence[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
@@ -2088,23 +2159,23 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      cdp_tumor_start_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
 	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      if( cdp_tumor_type[cdp_tumor_chr_len] == 0 || cdp_tumor_type[cdp_tumor_chr_len] == 1 || cdp_tumor_type[cdp_tumor_chr_len] == 8 || cdp_tumor_type[cdp_tumor_chr_len] == 9 )
 	      {
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 		cdp_tumor_start_read_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 		cdp_tumor_start_read_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 		cdp_tumor_end_read_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 		cdp_tumor_end_read_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      }
 	      
@@ -2133,6 +2204,35 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      cdp_tumor_snv_fstrand[cdp_tumor_chr_len] = 0;
 	      
 	    }
+	    
+	    
+	    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+	    
+	    
+	    
 	    cdp_tumor_chr_len += 1;
 	  }
 	
@@ -2143,6 +2243,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       
       
 
+      printf("cdp_tumor_chr_len %d\n", cdp_tumor_chr_len);  
 
       if( cdp_tumor_chr_len > 0 )
       {
@@ -2177,7 +2278,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     uint8_t *cdp_aux;  
     
     
-    int cdp_one_base_index_start = g_one_base_rd_len/4 + 1;
+    int cdp_one_base_index_start = g_one_base_rd_len/4 + 1;  
     int cdp_one_base_index = cdp_one_base_index_start;
     int cdp_pos_in_contig_start = cdp_one_base_index_start;
     int cdp_start_adj, cdp_end_adj, cdp_end_adj_indel;
@@ -5670,11 +5771,14 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	    
 
 
+	    
 	    if( cdp_begin < 2 && cdp_pos >= cdp_one_base_index_start ) 
 	    {
+	      
 	      if( cdp_pos - g_overlap_mult*g_insert_max_size <= cdp_pos_in_contig_start ) 
 
 	      {
+		
 		while( cdp_pos - g_overlap_mult*g_insert_max_size <= cdp_pos_in_contig_start && cdp_begin < 2 ) 
 
 		{
@@ -10366,6 +10470,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		  }
 		}
 	      }
+	      
 	      if( cdp_pos_in_contig_start > 2*g_insert_max_size && g_tumor_sv == 0 )  
 
 	      {
@@ -10680,48 +10785,57 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		      
 		      
 		      {
-			cdp_indel_i_list_start[cdp_indel_i_list_index] = cdp_pos_in_contig_start;
-			cdp_indel_i_list_start_binom_cdf[cdp_indel_i_list_index] = cdp_binom_cdf;
-			cdp_indel_i_list_start_hez_binom_cdf[cdp_indel_i_list_index] = cdp_hez_binom_cdf;  
-			cdp_indel_i_list_dist[cdp_indel_i_list_index] = cdp_one_base_indel_idist[cdp_one_base_index];
-			cdp_indel_i_list_start_conc[cdp_indel_i_list_index] = cdp_one_base_conc[cdp_one_base_index];
-			
-			cdp_indel_i_list_start_i[cdp_indel_i_list_index] = cdp_indel_i_temp;  
-			
-			cdp_indel_i_list_start_rd[cdp_indel_i_list_index] = cdp_one_base_sc_left_rd[cdp_one_base_index + 1] + cdp_one_base_sc_right_rd[cdp_one_base_index];
-			cdp_indel_i_list_start_sc[cdp_indel_i_list_index] = cdp_one_base_sc_left[cdp_one_base_index + 1] + cdp_one_base_sc_right[cdp_one_base_index]; 
-			cdp_indel_i_list_start_rd[cdp_indel_i_list_index] = cdp_indel_rd_temp;  
-			
-			if( cdp_indel_i_list_dist[cdp_indel_i_list_index] <= g_indel_i_seq_len )
+			if( cdp_indel_i_list_index < g_sv_list_len - 1 )  
 			{
-			  for(cdp_tumor_loop2=0;cdp_tumor_loop2<cdp_indel_i_list_dist[cdp_indel_i_list_index];cdp_tumor_loop2++)
-			  {
-			    cdp_indel_i_list_seq[cdp_tumor_loop2][cdp_indel_i_list_index] = cdp_one_base_indel_i_seq[cdp_tumor_loop2][cdp_one_base_index];
-			  }
-			}
-			
-			
-			
-			
+			  cdp_indel_i_list_start[cdp_indel_i_list_index] = cdp_pos_in_contig_start;
+			  cdp_indel_i_list_start_binom_cdf[cdp_indel_i_list_index] = cdp_binom_cdf;
+			  cdp_indel_i_list_start_hez_binom_cdf[cdp_indel_i_list_index] = cdp_hez_binom_cdf;  
+			  cdp_indel_i_list_dist[cdp_indel_i_list_index] = cdp_one_base_indel_idist[cdp_one_base_index];
+			  cdp_indel_i_list_start_conc[cdp_indel_i_list_index] = cdp_one_base_conc[cdp_one_base_index];
 			  
+			  cdp_indel_i_list_start_i[cdp_indel_i_list_index] = cdp_indel_i_temp;  
+			  
+			  cdp_indel_i_list_start_rd[cdp_indel_i_list_index] = cdp_one_base_sc_left_rd[cdp_one_base_index + 1] + cdp_one_base_sc_right_rd[cdp_one_base_index];
+			  cdp_indel_i_list_start_sc[cdp_indel_i_list_index] = cdp_one_base_sc_left[cdp_one_base_index + 1] + cdp_one_base_sc_right[cdp_one_base_index]; 
+			  cdp_indel_i_list_start_rd[cdp_indel_i_list_index] = cdp_indel_rd_temp;  
+			  
+			  if( cdp_indel_i_list_dist[cdp_indel_i_list_index] <= g_indel_i_seq_len )
+			  {
+			    for(cdp_tumor_loop2=0;cdp_tumor_loop2<cdp_indel_i_list_dist[cdp_indel_i_list_index];cdp_tumor_loop2++)
+			    {
+			      cdp_indel_i_list_seq[cdp_tumor_loop2][cdp_indel_i_list_index] = cdp_one_base_indel_i_seq[cdp_tumor_loop2][cdp_one_base_index];
+			    }
+			  }
+			  
+			  
+			  
+			  
+			    
+			  
+			  
+			  
+			  
+			  for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
+			  {
+			    if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			    {
+			      cdp_indel_i_list_start_other_len[cdp_indel_i_list_index] = cdp_tumor_loop2;
+			      break;
+			    }
+			    else if( cdp_tumor_loop2 == g_other_len - 1 )
+			    {
+			      cdp_indel_i_list_start_other_len[cdp_indel_i_list_index] = cdp_tumor_loop2 + 1;
+			    }
+			  }
+			  
+			  cdp_indel_i_list_index += 1;
+			}  
 			
-			
-			
-			
-			for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
+			else
 			{
-			  if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
-			  {
-			    cdp_indel_i_list_start_other_len[cdp_indel_i_list_index] = cdp_tumor_loop2;
-			    break;
-			  }
-			  else if( cdp_tumor_loop2 == g_other_len - 1 )
-			  {
-			    cdp_indel_i_list_start_other_len[cdp_indel_i_list_index] = cdp_tumor_loop2 + 1;
-			  }
+			  g_sv_list_len_over = 1;
 			}
 			
-			cdp_indel_i_list_index += 1;
 		      }
 		    }
 		  } 
@@ -10812,36 +10926,45 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 
 
 			{
-			  cdp_indel_d_list_index += 1;
-			  cdp_indel_d_list_start[cdp_indel_d_list_index] = cdp_pos_in_contig_start;
-			  cdp_indel_d_list_start_binom_cdf[cdp_indel_d_list_index] = cdp_binom_cdf;
-			  cdp_indel_d_list_start_hez_binom_cdf[cdp_indel_d_list_index] = cdp_hez_binom_cdf;  
-			  cdp_indel_d_list_start_conc[cdp_indel_d_list_index] = cdp_one_base_conc[cdp_one_base_index];
-			  
-			  cdp_indel_d_list_start_f[cdp_indel_d_list_index] = cdp_indel_d_f_temp;  
-			  
-			  cdp_indel_d_list_start_rd[cdp_indel_d_list_index] = cdp_one_base_sc_right_rd[cdp_one_base_index] + cdp_one_base_indel_d_f_rd[cdp_one_base_index];
-			  cdp_indel_d_list_start_sc[cdp_indel_d_list_index] = cdp_one_base_sc_right[cdp_one_base_index]; 
-			  cdp_indel_d_list_start_rd[cdp_indel_d_list_index] = cdp_indel_rd_temp;  
-			  
-			  
-			  
-			    
-			  
-			  
-			  
-			  
-			  for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
+			  if( cdp_indel_d_list_index < g_sv_list_len - 1 )  
 			  {
-			    if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			    cdp_indel_d_list_index += 1;
+			    cdp_indel_d_list_start[cdp_indel_d_list_index] = cdp_pos_in_contig_start;
+			    cdp_indel_d_list_start_binom_cdf[cdp_indel_d_list_index] = cdp_binom_cdf;
+			    cdp_indel_d_list_start_hez_binom_cdf[cdp_indel_d_list_index] = cdp_hez_binom_cdf;  
+			    cdp_indel_d_list_start_conc[cdp_indel_d_list_index] = cdp_one_base_conc[cdp_one_base_index];
+			    
+			    cdp_indel_d_list_start_f[cdp_indel_d_list_index] = cdp_indel_d_f_temp;  
+			    
+			    cdp_indel_d_list_start_rd[cdp_indel_d_list_index] = cdp_one_base_sc_right_rd[cdp_one_base_index] + cdp_one_base_indel_d_f_rd[cdp_one_base_index];
+			    cdp_indel_d_list_start_sc[cdp_indel_d_list_index] = cdp_one_base_sc_right[cdp_one_base_index]; 
+			    cdp_indel_d_list_start_rd[cdp_indel_d_list_index] = cdp_indel_rd_temp;  
+			    
+			    
+			    
+			      
+			    
+			    
+			    
+			    
+			    for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
 			    {
-			      cdp_indel_d_list_start_other_len[cdp_indel_d_list_index] = cdp_tumor_loop2;
-			      break;
+			      if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			      {
+				cdp_indel_d_list_start_other_len[cdp_indel_d_list_index] = cdp_tumor_loop2;
+				break;
+			      }
+			      else if( cdp_tumor_loop2 == g_other_len - 1 )
+			      {
+				cdp_indel_d_list_start_other_len[cdp_indel_d_list_index] = cdp_tumor_loop2 + 1;
+			      }
 			    }
-			    else if( cdp_tumor_loop2 == g_other_len - 1 )
-			    {
-			      cdp_indel_d_list_start_other_len[cdp_indel_d_list_index] = cdp_tumor_loop2 + 1;
-			    }
+			    
+			  }  
+			  
+			  else
+			  {
+			    g_sv_list_len_over = 1;
 			  }
 			  
 			}
@@ -11065,24 +11188,33 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 			}
 			else if( (cdp_pos_in_contig_start - cdp_ins_list_start[cdp_ins_list_index] > g_sc_range && cdp_ins_list_start[cdp_ins_list_index] != -1) || (cdp_pos_in_contig_start - cdp_ins_list_end[cdp_ins_list_index] > g_sc_range && cdp_ins_list_end[cdp_ins_list_index] != -1) )
 			{
-			  cdp_ins_list_index += 1;
-			  cdp_ins_list_start[cdp_ins_list_index] = cdp_pos_in_contig_start;
-			  cdp_ins_list_start_binom_cdf[cdp_ins_list_index] = cdp_binom_cdf;
-			  cdp_ins_list_start_ins[cdp_ins_list_index] = cdp_one_base_ins[cdp_one_base_index];  
-			  cdp_ins_list_start_rd[cdp_ins_list_index] = cdp_one_base_rd[cdp_one_base_index];  
-			  cdp_ins_list_start_conc[cdp_ins_list_index] = cdp_one_base_conc[cdp_one_base_index];
-			  for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
+			  if( cdp_ins_list_index < g_sv_list_len - 1 )  
 			  {
-			    if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			    cdp_ins_list_index += 1;
+			    cdp_ins_list_start[cdp_ins_list_index] = cdp_pos_in_contig_start;
+			    cdp_ins_list_start_binom_cdf[cdp_ins_list_index] = cdp_binom_cdf;
+			    cdp_ins_list_start_ins[cdp_ins_list_index] = cdp_one_base_ins[cdp_one_base_index];  
+			    cdp_ins_list_start_rd[cdp_ins_list_index] = cdp_one_base_rd[cdp_one_base_index];  
+			    cdp_ins_list_start_conc[cdp_ins_list_index] = cdp_one_base_conc[cdp_one_base_index];
+			    for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
 			    {
-			      cdp_ins_list_start_other_len[cdp_ins_list_index] = cdp_tumor_loop2;
-			      break;
+			      if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			      {
+				cdp_ins_list_start_other_len[cdp_ins_list_index] = cdp_tumor_loop2;
+				break;
+			      }
+			      else if( cdp_tumor_loop2 == g_other_len - 1 )
+			      {
+				cdp_ins_list_start_other_len[cdp_ins_list_index] = cdp_tumor_loop2 + 1;
+			      }
 			    }
-			    else if( cdp_tumor_loop2 == g_other_len - 1 )
-			    {
-			      cdp_ins_list_start_other_len[cdp_ins_list_index] = cdp_tumor_loop2 + 1;
-			    }
+			  }  
+			  
+			  else
+			  {
+			    g_sv_list_len_over = 1;
 			  }
+			  
 			}
 			else if( cdp_ins_list_start[cdp_ins_list_index] == -1 || cdp_binom_cdf < cdp_ins_list_start_binom_cdf[cdp_ins_list_index] )
 			{
@@ -11162,24 +11294,33 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 			}
 			else if( (cdp_pos_in_contig_start - cdp_ins_list_start[cdp_ins_list_index] > g_sc_range && cdp_ins_list_start[cdp_ins_list_index] != -1) || (cdp_pos_in_contig_start - cdp_ins_list_end[cdp_ins_list_index] > g_sc_range && cdp_ins_list_end[cdp_ins_list_index] != -1) )
 			{
-			  cdp_ins_list_index += 1;
-			  cdp_ins_list_end[cdp_ins_list_index] = cdp_pos_in_contig_start;
-			  cdp_ins_list_end_binom_cdf[cdp_ins_list_index] = cdp_binom_cdf;
-			  cdp_ins_list_end_ins[cdp_ins_list_index] = cdp_one_base_ins[cdp_one_base_index];  
-			  cdp_ins_list_end_rd[cdp_ins_list_index] = cdp_one_base_rd[cdp_one_base_index];  
-			  cdp_ins_list_end_conc[cdp_ins_list_index] = cdp_one_base_conc[cdp_one_base_index];
-			  for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
+			  if( cdp_ins_list_index < g_sv_list_len - 1 )  
 			  {
-			    if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			    cdp_ins_list_index += 1;
+			    cdp_ins_list_end[cdp_ins_list_index] = cdp_pos_in_contig_start;
+			    cdp_ins_list_end_binom_cdf[cdp_ins_list_index] = cdp_binom_cdf;
+			    cdp_ins_list_end_ins[cdp_ins_list_index] = cdp_one_base_ins[cdp_one_base_index];  
+			    cdp_ins_list_end_rd[cdp_ins_list_index] = cdp_one_base_rd[cdp_one_base_index];  
+			    cdp_ins_list_end_conc[cdp_ins_list_index] = cdp_one_base_conc[cdp_one_base_index];
+			    for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
 			    {
-			      cdp_ins_list_end_other_len[cdp_ins_list_index] = cdp_tumor_loop2;
-			      break;
+			      if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			      {
+				cdp_ins_list_end_other_len[cdp_ins_list_index] = cdp_tumor_loop2;
+				break;
+			      }
+			      else if( cdp_tumor_loop2 == g_other_len - 1 )
+			      {
+				cdp_ins_list_end_other_len[cdp_ins_list_index] = cdp_tumor_loop2 + 1;
+			      }
 			    }
-			    else if( cdp_tumor_loop2 == g_other_len - 1 )
-			    {
-			      cdp_ins_list_end_other_len[cdp_ins_list_index] = cdp_tumor_loop2 + 1;
-			    }
+			  }  
+			  
+			  else
+			  {
+			    g_sv_list_len_over = 1;
 			  }
+			  
 			}
 			else if( cdp_ins_list_end[cdp_ins_list_index] == -1 || cdp_binom_cdf < cdp_ins_list_end_binom_cdf[cdp_ins_list_index] )
 			{
@@ -11254,29 +11395,38 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		    if( cdp_binom_cdf <= g_pval_threshold1 ) 
 		    
 		    {
-		      cdp_ctx_f_list[cdp_ctx_f_list_index] = cdp_pos_in_contig_start;
-		      cdp_ctx_f_list_binom_cdf[cdp_ctx_f_list_index] = cdp_binom_cdf;
-		      cdp_ctx_f_list_hez_binom_cdf[cdp_ctx_f_list_index] = cdp_hez_binom_cdf;  
-		      cdp_ctx_f_list_mchr[cdp_ctx_f_list_index] = cdp_one_base_ctx_f_mchr[cdp_one_base_index];
-		      cdp_ctx_f_list_mpos[cdp_ctx_f_list_index] = cdp_one_base_ctx_f_mpos[cdp_one_base_index];
-		      cdp_ctx_f_list_conc[cdp_ctx_f_list_index] = cdp_one_base_conc[cdp_one_base_index];
-		      cdp_ctx_f_list_rd[cdp_ctx_f_list_index] = cdp_one_base_rd[cdp_one_base_index];  
-		      cdp_ctx_f_list_ctx_f[cdp_ctx_f_list_index] = cdp_one_base_ctx_f[cdp_one_base_index];  
-		      cdp_ctx_f_list_read_start[cdp_ctx_f_list_index] = cdp_one_base_ctx_f_read_start[cdp_one_base_index];  
-		      cdp_ctx_f_list_read_end[cdp_ctx_f_list_index] = cdp_one_base_ctx_f_read_end[cdp_one_base_index];  
-		      for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
+		      if( cdp_ctx_f_list_index < g_sv_list_len - 1 )  
 		      {
-			if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			cdp_ctx_f_list[cdp_ctx_f_list_index] = cdp_pos_in_contig_start;
+			cdp_ctx_f_list_binom_cdf[cdp_ctx_f_list_index] = cdp_binom_cdf;
+			cdp_ctx_f_list_hez_binom_cdf[cdp_ctx_f_list_index] = cdp_hez_binom_cdf;  
+			cdp_ctx_f_list_mchr[cdp_ctx_f_list_index] = cdp_one_base_ctx_f_mchr[cdp_one_base_index];
+			cdp_ctx_f_list_mpos[cdp_ctx_f_list_index] = cdp_one_base_ctx_f_mpos[cdp_one_base_index];
+			cdp_ctx_f_list_conc[cdp_ctx_f_list_index] = cdp_one_base_conc[cdp_one_base_index];
+			cdp_ctx_f_list_rd[cdp_ctx_f_list_index] = cdp_one_base_rd[cdp_one_base_index];  
+			cdp_ctx_f_list_ctx_f[cdp_ctx_f_list_index] = cdp_one_base_ctx_f[cdp_one_base_index];  
+			cdp_ctx_f_list_read_start[cdp_ctx_f_list_index] = cdp_one_base_ctx_f_read_start[cdp_one_base_index];  
+			cdp_ctx_f_list_read_end[cdp_ctx_f_list_index] = cdp_one_base_ctx_f_read_end[cdp_one_base_index];  
+			for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
 			{
-			  cdp_ctx_f_list_other_len[cdp_ctx_f_list_index] = cdp_tumor_loop2;
-			  break;
+			  if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			  {
+			    cdp_ctx_f_list_other_len[cdp_ctx_f_list_index] = cdp_tumor_loop2;
+			    break;
+			  }
+			  else if( cdp_tumor_loop2 == g_other_len - 1 )
+			  {
+			    cdp_ctx_f_list_other_len[cdp_ctx_f_list_index] = cdp_tumor_loop2 + 1;
+			  }
 			}
-			else if( cdp_tumor_loop2 == g_other_len - 1 )
-			{
-			  cdp_ctx_f_list_other_len[cdp_ctx_f_list_index] = cdp_tumor_loop2 + 1;
-			}
+			cdp_ctx_f_list_index += 1;
+		      }  
+		      
+		      else
+		      {
+			g_sv_list_len_over = 1;
 		      }
-		      cdp_ctx_f_list_index += 1;
+		      
 		    }
 		  }
 		  
@@ -11325,29 +11475,38 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		    if( cdp_binom_cdf <= g_pval_threshold1 ) 
 		    
 		    {
-		      cdp_ctx_r_list[cdp_ctx_r_list_index] = cdp_pos_in_contig_start;
-		      cdp_ctx_r_list_binom_cdf[cdp_ctx_r_list_index] = cdp_binom_cdf;
-		      cdp_ctx_r_list_hez_binom_cdf[cdp_ctx_r_list_index] = cdp_hez_binom_cdf;  
-		      cdp_ctx_r_list_mchr[cdp_ctx_r_list_index] = cdp_one_base_ctx_r_mchr[cdp_one_base_index];
-		      cdp_ctx_r_list_mpos[cdp_ctx_r_list_index] = cdp_one_base_ctx_r_mpos[cdp_one_base_index];
-		      cdp_ctx_r_list_conc[cdp_ctx_r_list_index] = cdp_one_base_conc[cdp_one_base_index];
-		      cdp_ctx_r_list_rd[cdp_ctx_r_list_index] = cdp_one_base_rd[cdp_one_base_index];  
-		      cdp_ctx_r_list_ctx_r[cdp_ctx_r_list_index] = cdp_one_base_ctx_r[cdp_one_base_index];  
-		      cdp_ctx_r_list_read_start[cdp_ctx_r_list_index] = cdp_one_base_ctx_r_read_start[cdp_one_base_index];  
-		      cdp_ctx_r_list_read_end[cdp_ctx_r_list_index] = cdp_one_base_ctx_r_read_end[cdp_one_base_index];  
-		      for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
+		      if( cdp_ctx_r_list_index < g_sv_list_len - 1 )  
 		      {
-			if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			cdp_ctx_r_list[cdp_ctx_r_list_index] = cdp_pos_in_contig_start;
+			cdp_ctx_r_list_binom_cdf[cdp_ctx_r_list_index] = cdp_binom_cdf;
+			cdp_ctx_r_list_hez_binom_cdf[cdp_ctx_r_list_index] = cdp_hez_binom_cdf;  
+			cdp_ctx_r_list_mchr[cdp_ctx_r_list_index] = cdp_one_base_ctx_r_mchr[cdp_one_base_index];
+			cdp_ctx_r_list_mpos[cdp_ctx_r_list_index] = cdp_one_base_ctx_r_mpos[cdp_one_base_index];
+			cdp_ctx_r_list_conc[cdp_ctx_r_list_index] = cdp_one_base_conc[cdp_one_base_index];
+			cdp_ctx_r_list_rd[cdp_ctx_r_list_index] = cdp_one_base_rd[cdp_one_base_index];  
+			cdp_ctx_r_list_ctx_r[cdp_ctx_r_list_index] = cdp_one_base_ctx_r[cdp_one_base_index];  
+			cdp_ctx_r_list_read_start[cdp_ctx_r_list_index] = cdp_one_base_ctx_r_read_start[cdp_one_base_index];  
+			cdp_ctx_r_list_read_end[cdp_ctx_r_list_index] = cdp_one_base_ctx_r_read_end[cdp_one_base_index];  
+			for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
 			{
-			  cdp_ctx_r_list_other_len[cdp_ctx_r_list_index] = cdp_tumor_loop2;
-			  break;
+			  if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			  {
+			    cdp_ctx_r_list_other_len[cdp_ctx_r_list_index] = cdp_tumor_loop2;
+			    break;
+			  }
+			  else if( cdp_tumor_loop2 == g_other_len - 1 )
+			  {
+			    cdp_ctx_r_list_other_len[cdp_ctx_r_list_index] = cdp_tumor_loop2 + 1;
+			  }
 			}
-			else if( cdp_tumor_loop2 == g_other_len - 1 )
-			{
-			  cdp_ctx_r_list_other_len[cdp_ctx_r_list_index] = cdp_tumor_loop2 + 1;
-			}
+			cdp_ctx_r_list_index += 1;
+		      }  
+		      
+		      else
+		      {
+			g_sv_list_len_over = 1;
 		      }
-		      cdp_ctx_r_list_index += 1;
+		      
 		    }
 		  }
 		  
@@ -11397,28 +11556,37 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		    if( cdp_binom_cdf <= g_pval_threshold1 ) 
 		    
 		    {
-		      cdp_dup_list_start[cdp_dup_list_index] = cdp_pos_in_contig_start;
-		      cdp_dup_list_start_binom_cdf[cdp_dup_list_index] = cdp_binom_cdf;
-		      cdp_dup_list_start_hez_binom_cdf[cdp_dup_list_index] = cdp_hez_binom_cdf;  
-		      cdp_dup_list_dist[cdp_dup_list_index] = cdp_one_base_dup_rdist[cdp_one_base_index];
-		      cdp_dup_list_start_conc[cdp_dup_list_index] = cdp_one_base_conc[cdp_one_base_index];
-		      cdp_dup_list_start_rd[cdp_dup_list_index] = cdp_one_base_rd[cdp_one_base_index];  
-		      cdp_dup_list_start_dup_r[cdp_dup_list_index] = cdp_one_base_dup_r[cdp_one_base_index];  
-		      cdp_dup_list_start_read_start[cdp_dup_list_index] = cdp_one_base_dup_r_read_start[cdp_one_base_index];  
-		      cdp_dup_list_start_read_end[cdp_dup_list_index] = cdp_one_base_dup_r_read_end[cdp_one_base_index];  
-		      for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
+		      if( cdp_dup_list_index < g_sv_list_len - 1 ) 
 		      {
-			if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			cdp_dup_list_start[cdp_dup_list_index] = cdp_pos_in_contig_start;
+			cdp_dup_list_start_binom_cdf[cdp_dup_list_index] = cdp_binom_cdf;
+			cdp_dup_list_start_hez_binom_cdf[cdp_dup_list_index] = cdp_hez_binom_cdf;  
+			cdp_dup_list_dist[cdp_dup_list_index] = cdp_one_base_dup_rdist[cdp_one_base_index];
+			cdp_dup_list_start_conc[cdp_dup_list_index] = cdp_one_base_conc[cdp_one_base_index];
+			cdp_dup_list_start_rd[cdp_dup_list_index] = cdp_one_base_rd[cdp_one_base_index];  
+			cdp_dup_list_start_dup_r[cdp_dup_list_index] = cdp_one_base_dup_r[cdp_one_base_index];  
+			cdp_dup_list_start_read_start[cdp_dup_list_index] = cdp_one_base_dup_r_read_start[cdp_one_base_index];  
+			cdp_dup_list_start_read_end[cdp_dup_list_index] = cdp_one_base_dup_r_read_end[cdp_one_base_index];  
+			for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
 			{
-			  cdp_dup_list_start_other_len[cdp_dup_list_index] = cdp_tumor_loop2;
-			  break;
+			  if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			  {
+			    cdp_dup_list_start_other_len[cdp_dup_list_index] = cdp_tumor_loop2;
+			    break;
+			  }
+			  else if( cdp_tumor_loop2 == g_other_len - 1 )
+			  {
+			    cdp_dup_list_start_other_len[cdp_dup_list_index] = cdp_tumor_loop2 + 1;
+			  }
 			}
-			else if( cdp_tumor_loop2 == g_other_len - 1 )
-			{
-			  cdp_dup_list_start_other_len[cdp_dup_list_index] = cdp_tumor_loop2 + 1;
-			}
+			cdp_dup_list_index += 1;
+		      } 
+		      
+		      else
+		      {
+			g_sv_list_len_over = 1;
 		      }
-		      cdp_dup_list_index += 1;
+		      
 		    }
 		  }
 		  
@@ -11736,28 +11904,37 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		    if( cdp_binom_cdf <= g_pval_threshold1 ) 
 		    
 		    {
-		      cdp_del_list_start[cdp_del_list_index] = cdp_pos_in_contig_start;
-		      cdp_del_list_dist[cdp_del_list_index] = cdp_one_base_del_fdist[cdp_one_base_index];
-		      cdp_del_list_start_binom_cdf[cdp_del_list_index] = cdp_binom_cdf;
-		      cdp_del_list_start_hez_binom_cdf[cdp_del_list_index] = cdp_hez_binom_cdf;  
-		      cdp_del_list_start_conc[cdp_del_list_index] = cdp_one_base_conc[cdp_one_base_index];
-		      cdp_del_list_start_rd[cdp_del_list_index] = cdp_one_base_rd[cdp_one_base_index];  
-		      cdp_del_list_start_del_f[cdp_del_list_index] = cdp_one_base_del_f[cdp_one_base_index];  
-		      cdp_del_list_start_read_start[cdp_del_list_index] = cdp_one_base_del_f_read_start[cdp_one_base_index];  
-		      cdp_del_list_start_read_end[cdp_del_list_index] = cdp_one_base_del_f_read_end[cdp_one_base_index];  
-		      for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
+		      if( cdp_del_list_index < g_sv_list_len - 1 )  
 		      {
-			if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			cdp_del_list_start[cdp_del_list_index] = cdp_pos_in_contig_start;
+			cdp_del_list_dist[cdp_del_list_index] = cdp_one_base_del_fdist[cdp_one_base_index];
+			cdp_del_list_start_binom_cdf[cdp_del_list_index] = cdp_binom_cdf;
+			cdp_del_list_start_hez_binom_cdf[cdp_del_list_index] = cdp_hez_binom_cdf;  
+			cdp_del_list_start_conc[cdp_del_list_index] = cdp_one_base_conc[cdp_one_base_index];
+			cdp_del_list_start_rd[cdp_del_list_index] = cdp_one_base_rd[cdp_one_base_index];  
+			cdp_del_list_start_del_f[cdp_del_list_index] = cdp_one_base_del_f[cdp_one_base_index];  
+			cdp_del_list_start_read_start[cdp_del_list_index] = cdp_one_base_del_f_read_start[cdp_one_base_index];  
+			cdp_del_list_start_read_end[cdp_del_list_index] = cdp_one_base_del_f_read_end[cdp_one_base_index];  
+			for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
 			{
-			  cdp_del_list_start_other_len[cdp_del_list_index] = cdp_tumor_loop2;
-			  break;
+			  if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			  {
+			    cdp_del_list_start_other_len[cdp_del_list_index] = cdp_tumor_loop2;
+			    break;
+			  }
+			  else if( cdp_tumor_loop2 == g_other_len - 1 )
+			  {
+			    cdp_del_list_start_other_len[cdp_del_list_index] = cdp_tumor_loop2 + 1;
+			  }
 			}
-			else if( cdp_tumor_loop2 == g_other_len - 1 )
-			{
-			  cdp_del_list_start_other_len[cdp_del_list_index] = cdp_tumor_loop2 + 1;
-			}
+			cdp_del_list_index += 1;
+		      }  
+		      
+		      else
+		      {
+			g_sv_list_len_over = 1;
 		      }
-		      cdp_del_list_index += 1;
+		      
 		    }
 		  }
 		  
@@ -12099,30 +12276,39 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		    if( cdp_binom_cdf <= g_pval_threshold1 ) 
 		    
 		    {
-		      cdp_inv_f_list_start[cdp_inv_f_list_index] = cdp_pos_in_contig_start;
-		      cdp_inv_f_list_dist[cdp_inv_f_list_index] = cdp_one_base_inv_f1dist[cdp_one_base_index];
-		      cdp_inv_f_list_start_binom_cdf[cdp_inv_f_list_index] = cdp_binom_cdf;
-		      cdp_inv_f_list_start_hez_binom_cdf[cdp_inv_f_list_index] = cdp_hez_binom_cdf;  
-		      cdp_inv_f_list_start_conc[cdp_inv_f_list_index] = cdp_one_base_conc[cdp_one_base_index];
-		      cdp_inv_f_list_start_rd[cdp_inv_f_list_index] = cdp_one_base_rd[cdp_one_base_index];  
-		      cdp_inv_f_list_start_inv[cdp_inv_f_list_index] = cdp_one_base_inv_f1[cdp_one_base_index];  
-		      cdp_inv_f_list_start_read_start[cdp_inv_f_list_index] = cdp_one_base_inv_f1_read_start[cdp_one_base_index];  
-		      cdp_inv_f_list_start_read_end[cdp_inv_f_list_index] = cdp_one_base_inv_f1_read_end[cdp_one_base_index];  
-		      for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
+		      if( cdp_inv_f_list_index < g_sv_list_len - 1 ) 
 		      {
-			if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			cdp_inv_f_list_start[cdp_inv_f_list_index] = cdp_pos_in_contig_start;
+			cdp_inv_f_list_dist[cdp_inv_f_list_index] = cdp_one_base_inv_f1dist[cdp_one_base_index];
+			cdp_inv_f_list_start_binom_cdf[cdp_inv_f_list_index] = cdp_binom_cdf;
+			cdp_inv_f_list_start_hez_binom_cdf[cdp_inv_f_list_index] = cdp_hez_binom_cdf;  
+			cdp_inv_f_list_start_conc[cdp_inv_f_list_index] = cdp_one_base_conc[cdp_one_base_index];
+			cdp_inv_f_list_start_rd[cdp_inv_f_list_index] = cdp_one_base_rd[cdp_one_base_index];  
+			cdp_inv_f_list_start_inv[cdp_inv_f_list_index] = cdp_one_base_inv_f1[cdp_one_base_index];  
+			cdp_inv_f_list_start_read_start[cdp_inv_f_list_index] = cdp_one_base_inv_f1_read_start[cdp_one_base_index];  
+			cdp_inv_f_list_start_read_end[cdp_inv_f_list_index] = cdp_one_base_inv_f1_read_end[cdp_one_base_index];  
+			for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
 			{
-			  cdp_inv_f_list_start_other_len[cdp_inv_f_list_index] = cdp_tumor_loop2;
-			  break;
+			  if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			  {
+			    cdp_inv_f_list_start_other_len[cdp_inv_f_list_index] = cdp_tumor_loop2;
+			    break;
+			  }
+			  else if( cdp_tumor_loop2 == g_other_len - 1 )
+			  {
+			    cdp_inv_f_list_start_other_len[cdp_inv_f_list_index] = cdp_tumor_loop2 + 1;
+			  }
 			}
-			else if( cdp_tumor_loop2 == g_other_len - 1 )
-			{
-			  cdp_inv_f_list_start_other_len[cdp_inv_f_list_index] = cdp_tumor_loop2 + 1;
-			}
+			
+			
+			cdp_inv_f_list_index += 1;
+		      }  
+		      
+		      else
+		      {
+			g_sv_list_len_over = 1;
 		      }
 		      
-		      
-		      cdp_inv_f_list_index += 1;		      
 		    }
 		  }
 		  
@@ -12439,28 +12625,37 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		    if( cdp_binom_cdf <= g_pval_threshold1 ) 
 		    
 		    {
-		      cdp_inv_r_list_start[cdp_inv_r_list_index] = cdp_pos_in_contig_start;
-		      cdp_inv_r_list_dist[cdp_inv_r_list_index] = cdp_one_base_inv_r1dist[cdp_one_base_index];
-		      cdp_inv_r_list_start_binom_cdf[cdp_inv_r_list_index] = cdp_binom_cdf;
-		      cdp_inv_r_list_start_hez_binom_cdf[cdp_inv_r_list_index] = cdp_hez_binom_cdf;  
-		      cdp_inv_r_list_start_conc[cdp_inv_r_list_index] = cdp_one_base_conc[cdp_one_base_index];
-		      cdp_inv_r_list_start_rd[cdp_inv_r_list_index] = cdp_one_base_rd[cdp_one_base_index];  
-		      cdp_inv_r_list_start_inv[cdp_inv_r_list_index] = cdp_one_base_inv_r1[cdp_one_base_index];  
-		      cdp_inv_r_list_start_read_start[cdp_inv_r_list_index] = cdp_one_base_inv_r1_read_start[cdp_one_base_index];  
-		      cdp_inv_r_list_start_read_end[cdp_inv_r_list_index] = cdp_one_base_inv_r1_read_end[cdp_one_base_index];  
-		      for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
+		      if( cdp_inv_r_list_index < g_sv_list_len - 1 ) 
 		      {
-			if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			cdp_inv_r_list_start[cdp_inv_r_list_index] = cdp_pos_in_contig_start;
+			cdp_inv_r_list_dist[cdp_inv_r_list_index] = cdp_one_base_inv_r1dist[cdp_one_base_index];
+			cdp_inv_r_list_start_binom_cdf[cdp_inv_r_list_index] = cdp_binom_cdf;
+			cdp_inv_r_list_start_hez_binom_cdf[cdp_inv_r_list_index] = cdp_hez_binom_cdf;  
+			cdp_inv_r_list_start_conc[cdp_inv_r_list_index] = cdp_one_base_conc[cdp_one_base_index];
+			cdp_inv_r_list_start_rd[cdp_inv_r_list_index] = cdp_one_base_rd[cdp_one_base_index];  
+			cdp_inv_r_list_start_inv[cdp_inv_r_list_index] = cdp_one_base_inv_r1[cdp_one_base_index];  
+			cdp_inv_r_list_start_read_start[cdp_inv_r_list_index] = cdp_one_base_inv_r1_read_start[cdp_one_base_index];  
+			cdp_inv_r_list_start_read_end[cdp_inv_r_list_index] = cdp_one_base_inv_r1_read_end[cdp_one_base_index];  
+			for(cdp_tumor_loop2=0;cdp_tumor_loop2<g_other_len;cdp_tumor_loop2++)
 			{
-			  cdp_inv_r_list_start_other_len[cdp_inv_r_list_index] = cdp_tumor_loop2;
-			  break;
+			  if( cdp_one_base_other_type[cdp_tumor_loop2][cdp_one_base_index] == OTHER_EMPTY )
+			  {
+			    cdp_inv_r_list_start_other_len[cdp_inv_r_list_index] = cdp_tumor_loop2;
+			    break;
+			  }
+			  else if( cdp_tumor_loop2 == g_other_len - 1 )
+			  {
+			    cdp_inv_r_list_start_other_len[cdp_inv_r_list_index] = cdp_tumor_loop2 + 1;
+			  }
 			}
-			else if( cdp_tumor_loop2 == g_other_len - 1 )
-			{
-			  cdp_inv_r_list_start_other_len[cdp_inv_r_list_index] = cdp_tumor_loop2 + 1;
-			}
+			cdp_inv_r_list_index += 1;
+		      }  
+		      
+		      else
+		      {
+			g_sv_list_len_over = 1;
 		      }
-		      cdp_inv_r_list_index += 1;
+		      
 		    }
 		  }
 		  
@@ -12746,6 +12941,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      
 	      if( g_tumor_sv == 1 )
 	      {
+		
 
 		double cdp_tumor_prob;
 		while( cdp_tumor_start2_index < cdp_tumor_chr_len && cdp_tumor_start2[cdp_tumor_start2_index][0] < cdp_pos_in_contig_start )  
@@ -12765,6 +12961,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 
 		{
 		  cdp_tumor_loop = cdp_tumor_start2[cdp_tumor_start2_index][1];  
+		  
 		  if( cdp_tumor_start2[cdp_tumor_start2_index][0] == cdp_pos_in_contig_start )  
 
 		  {
@@ -12909,6 +13106,16 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 			  }
 			}
 		      }
+		      
+		      
+		      
+		      
+
+
+
+
+
+
 		      
 
 
@@ -14481,33 +14688,42 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	{
 	  if( cdp_dup_list_start[cdp_a_loop] >= 0 && cdp_dup_list_end[cdp_a_loop] >= 0 )
 	  {
-	    cdp_dup_begin = 1;
-	    cdp_first_start = cdp_dup_list_start[cdp_a_loop];
-	    cdp_last_start = cdp_dup_list_start[cdp_a_loop];
-	    cdp_first_end = cdp_dup_list_end[cdp_a_loop];
-	    cdp_last_end = cdp_dup_list_end[cdp_a_loop];
-	    cdp_first_dist = cdp_dup_list_dist[cdp_a_loop];
-	    cdp_last_dist = cdp_dup_list_dist[cdp_a_loop];
-	    cdp_dup_list2_start[cdp_dup_list2_index] = cdp_dup_list_start[cdp_a_loop];
-	    cdp_dup_list2_end[cdp_dup_list2_index] = cdp_dup_list_end[cdp_a_loop];
-	    cdp_dup_list2_start_dup_r[cdp_dup_list2_index] = cdp_dup_list_start_dup_r[cdp_a_loop];  
-	    cdp_dup_list2_end_dup_f[cdp_dup_list2_index] = cdp_dup_list_end_dup_f[cdp_a_loop];  
-	    cdp_dup_list2_dist[cdp_dup_list2_index] = cdp_dup_list_dist[cdp_a_loop];
-	    cdp_dup_list2_start_binom_cdf[cdp_dup_list2_index] = cdp_dup_list_start_binom_cdf[cdp_a_loop];
-	    cdp_dup_list2_start_hez_binom_cdf[cdp_dup_list2_index] = cdp_dup_list_start_hez_binom_cdf[cdp_a_loop];  
-	    cdp_dup_list2_end_binom_cdf[cdp_dup_list2_index] = cdp_dup_list_end_binom_cdf[cdp_a_loop];
-	    cdp_dup_list2_end_hez_binom_cdf[cdp_dup_list2_index] = cdp_dup_list_end_hez_binom_cdf[cdp_a_loop];  
-	    cdp_dup_list2_start_rd[cdp_dup_list2_index] = cdp_dup_list_start_rd[cdp_a_loop];  
-	    cdp_dup_list2_end_rd[cdp_dup_list2_index] = cdp_dup_list_end_rd[cdp_a_loop];  
-	    cdp_dup_list2_start_conc[cdp_dup_list2_index] = cdp_dup_list_start_conc[cdp_a_loop];
-	    cdp_dup_list2_end_conc[cdp_dup_list2_index] = cdp_dup_list_end_conc[cdp_a_loop];
-	    cdp_dup_list2_start_other_len[cdp_dup_list2_index] = cdp_dup_list_start_other_len[cdp_a_loop];
-	    cdp_dup_list2_end_other_len[cdp_dup_list2_index] = cdp_dup_list_end_other_len[cdp_a_loop];
-	    cdp_dup_list2_start_read_start[cdp_dup_list2_index] = cdp_dup_list_start_read_start[cdp_a_loop];  
-	    cdp_dup_list2_start_read_end[cdp_dup_list2_index] = cdp_dup_list_start_read_end[cdp_a_loop];  
-	    cdp_dup_list2_end_read_start[cdp_dup_list2_index] = cdp_dup_list_end_read_start[cdp_a_loop];  
-	    cdp_dup_list2_end_read_end[cdp_dup_list2_index] = cdp_dup_list_end_read_end[cdp_a_loop];  
-	    cdp_dup_list2_index += 1;
+	    if( cdp_dup_list2_index < g_sv_list2_len - 1 )  
+	    {
+	      cdp_dup_begin = 1;
+	      cdp_first_start = cdp_dup_list_start[cdp_a_loop];
+	      cdp_last_start = cdp_dup_list_start[cdp_a_loop];
+	      cdp_first_end = cdp_dup_list_end[cdp_a_loop];
+	      cdp_last_end = cdp_dup_list_end[cdp_a_loop];
+	      cdp_first_dist = cdp_dup_list_dist[cdp_a_loop];
+	      cdp_last_dist = cdp_dup_list_dist[cdp_a_loop];
+	      cdp_dup_list2_start[cdp_dup_list2_index] = cdp_dup_list_start[cdp_a_loop];
+	      cdp_dup_list2_end[cdp_dup_list2_index] = cdp_dup_list_end[cdp_a_loop];
+	      cdp_dup_list2_start_dup_r[cdp_dup_list2_index] = cdp_dup_list_start_dup_r[cdp_a_loop];  
+	      cdp_dup_list2_end_dup_f[cdp_dup_list2_index] = cdp_dup_list_end_dup_f[cdp_a_loop];  
+	      cdp_dup_list2_dist[cdp_dup_list2_index] = cdp_dup_list_dist[cdp_a_loop];
+	      cdp_dup_list2_start_binom_cdf[cdp_dup_list2_index] = cdp_dup_list_start_binom_cdf[cdp_a_loop];
+	      cdp_dup_list2_start_hez_binom_cdf[cdp_dup_list2_index] = cdp_dup_list_start_hez_binom_cdf[cdp_a_loop];  
+	      cdp_dup_list2_end_binom_cdf[cdp_dup_list2_index] = cdp_dup_list_end_binom_cdf[cdp_a_loop];
+	      cdp_dup_list2_end_hez_binom_cdf[cdp_dup_list2_index] = cdp_dup_list_end_hez_binom_cdf[cdp_a_loop];  
+	      cdp_dup_list2_start_rd[cdp_dup_list2_index] = cdp_dup_list_start_rd[cdp_a_loop];  
+	      cdp_dup_list2_end_rd[cdp_dup_list2_index] = cdp_dup_list_end_rd[cdp_a_loop];  
+	      cdp_dup_list2_start_conc[cdp_dup_list2_index] = cdp_dup_list_start_conc[cdp_a_loop];
+	      cdp_dup_list2_end_conc[cdp_dup_list2_index] = cdp_dup_list_end_conc[cdp_a_loop];
+	      cdp_dup_list2_start_other_len[cdp_dup_list2_index] = cdp_dup_list_start_other_len[cdp_a_loop];
+	      cdp_dup_list2_end_other_len[cdp_dup_list2_index] = cdp_dup_list_end_other_len[cdp_a_loop];
+	      cdp_dup_list2_start_read_start[cdp_dup_list2_index] = cdp_dup_list_start_read_start[cdp_a_loop];  
+	      cdp_dup_list2_start_read_end[cdp_dup_list2_index] = cdp_dup_list_start_read_end[cdp_a_loop];  
+	      cdp_dup_list2_end_read_start[cdp_dup_list2_index] = cdp_dup_list_end_read_start[cdp_a_loop];  
+	      cdp_dup_list2_end_read_end[cdp_dup_list2_index] = cdp_dup_list_end_read_end[cdp_a_loop];  
+	      cdp_dup_list2_index += 1;
+	    }  
+	    
+	    else
+	    {
+	      g_sv_list2_len_over = 1;
+	    }
+	    
 	  }
 	}
       }
@@ -14663,33 +14879,42 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	{
 	  if( cdp_del_list_start[cdp_a_loop] >= 0 && cdp_del_list_end[cdp_a_loop] >= 0 )
 	  {
-	    cdp_del_begin = 1;
-	    cdp_first_start = cdp_del_list_start[cdp_a_loop];
-	    cdp_last_start = cdp_del_list_start[cdp_a_loop];
-	    cdp_first_end = cdp_del_list_end[cdp_a_loop];
-	    cdp_last_end = cdp_del_list_end[cdp_a_loop];
-	    cdp_first_dist = cdp_del_list_dist[cdp_a_loop];
-	    cdp_last_dist = cdp_del_list_dist[cdp_a_loop];
-	    cdp_del_list2_start[cdp_del_list2_index] = cdp_del_list_start[cdp_a_loop];
-	    cdp_del_list2_end[cdp_del_list2_index] = cdp_del_list_end[cdp_a_loop];
-	    cdp_del_list2_start_del_f[cdp_del_list2_index] = cdp_del_list_start_del_f[cdp_a_loop];  
-	    cdp_del_list2_end_del_r[cdp_del_list2_index] = cdp_del_list_end_del_r[cdp_a_loop];  
-	    cdp_del_list2_dist[cdp_del_list2_index] = cdp_del_list_dist[cdp_a_loop];
-	    cdp_del_list2_start_binom_cdf[cdp_del_list2_index] = cdp_del_list_start_binom_cdf[cdp_a_loop];
-	    cdp_del_list2_start_hez_binom_cdf[cdp_del_list2_index] = cdp_del_list_start_hez_binom_cdf[cdp_a_loop];  
-	    cdp_del_list2_end_binom_cdf[cdp_del_list2_index] = cdp_del_list_end_binom_cdf[cdp_a_loop];
-	    cdp_del_list2_end_hez_binom_cdf[cdp_del_list2_index] = cdp_del_list_end_hez_binom_cdf[cdp_a_loop];  
-	    cdp_del_list2_start_rd[cdp_del_list2_index] = cdp_del_list_start_rd[cdp_a_loop];  
-	    cdp_del_list2_end_rd[cdp_del_list2_index] = cdp_del_list_end_rd[cdp_a_loop];  
-	    cdp_del_list2_start_conc[cdp_del_list2_index] = cdp_del_list_start_conc[cdp_a_loop];
-	    cdp_del_list2_end_conc[cdp_del_list2_index] = cdp_del_list_end_conc[cdp_a_loop];
-	    cdp_del_list2_start_other_len[cdp_del_list2_index] = cdp_del_list_start_other_len[cdp_a_loop];
-	    cdp_del_list2_end_other_len[cdp_del_list2_index] = cdp_del_list_end_other_len[cdp_a_loop];
-	    cdp_del_list2_start_read_start[cdp_del_list2_index] = cdp_del_list_start_read_start[cdp_a_loop];  
-	    cdp_del_list2_start_read_end[cdp_del_list2_index] = cdp_del_list_start_read_end[cdp_a_loop];  
-	    cdp_del_list2_end_read_start[cdp_del_list2_index] = cdp_del_list_end_read_start[cdp_a_loop];  
-	    cdp_del_list2_end_read_end[cdp_del_list2_index] = cdp_del_list_end_read_end[cdp_a_loop];  
-	    cdp_del_list2_index += 1;
+	    if( cdp_del_list2_index < g_sv_list2_len - 1 )  
+	    {
+	      cdp_del_begin = 1;
+	      cdp_first_start = cdp_del_list_start[cdp_a_loop];
+	      cdp_last_start = cdp_del_list_start[cdp_a_loop];
+	      cdp_first_end = cdp_del_list_end[cdp_a_loop];
+	      cdp_last_end = cdp_del_list_end[cdp_a_loop];
+	      cdp_first_dist = cdp_del_list_dist[cdp_a_loop];
+	      cdp_last_dist = cdp_del_list_dist[cdp_a_loop];
+	      cdp_del_list2_start[cdp_del_list2_index] = cdp_del_list_start[cdp_a_loop];
+	      cdp_del_list2_end[cdp_del_list2_index] = cdp_del_list_end[cdp_a_loop];
+	      cdp_del_list2_start_del_f[cdp_del_list2_index] = cdp_del_list_start_del_f[cdp_a_loop];  
+	      cdp_del_list2_end_del_r[cdp_del_list2_index] = cdp_del_list_end_del_r[cdp_a_loop];  
+	      cdp_del_list2_dist[cdp_del_list2_index] = cdp_del_list_dist[cdp_a_loop];
+	      cdp_del_list2_start_binom_cdf[cdp_del_list2_index] = cdp_del_list_start_binom_cdf[cdp_a_loop];
+	      cdp_del_list2_start_hez_binom_cdf[cdp_del_list2_index] = cdp_del_list_start_hez_binom_cdf[cdp_a_loop];  
+	      cdp_del_list2_end_binom_cdf[cdp_del_list2_index] = cdp_del_list_end_binom_cdf[cdp_a_loop];
+	      cdp_del_list2_end_hez_binom_cdf[cdp_del_list2_index] = cdp_del_list_end_hez_binom_cdf[cdp_a_loop];  
+	      cdp_del_list2_start_rd[cdp_del_list2_index] = cdp_del_list_start_rd[cdp_a_loop];  
+	      cdp_del_list2_end_rd[cdp_del_list2_index] = cdp_del_list_end_rd[cdp_a_loop];  
+	      cdp_del_list2_start_conc[cdp_del_list2_index] = cdp_del_list_start_conc[cdp_a_loop];
+	      cdp_del_list2_end_conc[cdp_del_list2_index] = cdp_del_list_end_conc[cdp_a_loop];
+	      cdp_del_list2_start_other_len[cdp_del_list2_index] = cdp_del_list_start_other_len[cdp_a_loop];
+	      cdp_del_list2_end_other_len[cdp_del_list2_index] = cdp_del_list_end_other_len[cdp_a_loop];
+	      cdp_del_list2_start_read_start[cdp_del_list2_index] = cdp_del_list_start_read_start[cdp_a_loop];  
+	      cdp_del_list2_start_read_end[cdp_del_list2_index] = cdp_del_list_start_read_end[cdp_a_loop];  
+	      cdp_del_list2_end_read_start[cdp_del_list2_index] = cdp_del_list_end_read_start[cdp_a_loop];  
+	      cdp_del_list2_end_read_end[cdp_del_list2_index] = cdp_del_list_end_read_end[cdp_a_loop];  
+	      cdp_del_list2_index += 1;
+	    }  
+	    
+	    else
+	    {
+	      g_sv_list2_len_over = 1;
+	    }
+	    
 	  }
 	}
       }
@@ -14855,33 +15080,42 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	{
 	  if( cdp_inv_f_list_start[cdp_a_loop] >= 0 && cdp_inv_f_list_end[cdp_a_loop] >= 0 )
 	  {
-	    cdp_inv_begin = 1;
-	    cdp_first_start = cdp_inv_f_list_start[cdp_a_loop];
-	    cdp_last_start = cdp_inv_f_list_start[cdp_a_loop];
-	    cdp_first_end = cdp_inv_f_list_end[cdp_a_loop];
-	    cdp_last_end = cdp_inv_f_list_end[cdp_a_loop];
-	    cdp_first_dist = cdp_inv_f_list_dist[cdp_a_loop];
-	    cdp_last_dist = cdp_inv_f_list_dist[cdp_a_loop];
-	    cdp_inv_f_list2_start[cdp_inv_f_list2_index] = cdp_inv_f_list_start[cdp_a_loop];
-	    cdp_inv_f_list2_end[cdp_inv_f_list2_index] = cdp_inv_f_list_end[cdp_a_loop];
-	    cdp_inv_f_list2_start_inv[cdp_inv_f_list2_index] = cdp_inv_f_list_start_inv[cdp_a_loop];  
-	    cdp_inv_f_list2_end_inv[cdp_inv_f_list2_index] = cdp_inv_f_list_end_inv[cdp_a_loop];  
-	    cdp_inv_f_list2_dist[cdp_inv_f_list2_index] = cdp_inv_f_list_dist[cdp_a_loop];
-	    cdp_inv_f_list2_start_binom_cdf[cdp_inv_f_list2_index] = cdp_inv_f_list_start_binom_cdf[cdp_a_loop];
-	    cdp_inv_f_list2_start_hez_binom_cdf[cdp_inv_f_list2_index] = cdp_inv_f_list_start_hez_binom_cdf[cdp_a_loop];  
-	    cdp_inv_f_list2_end_binom_cdf[cdp_inv_f_list2_index] = cdp_inv_f_list_end_binom_cdf[cdp_a_loop];
-	    cdp_inv_f_list2_end_hez_binom_cdf[cdp_inv_f_list2_index] = cdp_inv_f_list_end_hez_binom_cdf[cdp_a_loop];  
-	    cdp_inv_f_list2_start_rd[cdp_inv_f_list2_index] = cdp_inv_f_list_start_rd[cdp_a_loop];  
-	    cdp_inv_f_list2_end_rd[cdp_inv_f_list2_index] = cdp_inv_f_list_end_rd[cdp_a_loop];  
-	    cdp_inv_f_list2_start_conc[cdp_inv_f_list2_index] = cdp_inv_f_list_start_conc[cdp_a_loop];
-	    cdp_inv_f_list2_end_conc[cdp_inv_f_list2_index] = cdp_inv_f_list_end_conc[cdp_a_loop];
-	    cdp_inv_f_list2_start_other_len[cdp_inv_f_list2_index] = cdp_inv_f_list_start_other_len[cdp_a_loop];
-	    cdp_inv_f_list2_end_other_len[cdp_inv_f_list2_index] = cdp_inv_f_list_end_other_len[cdp_a_loop];
-	    cdp_inv_f_list2_start_read_start[cdp_inv_f_list2_index] = cdp_inv_f_list_start_read_start[cdp_a_loop];  
-	    cdp_inv_f_list2_start_read_end[cdp_inv_f_list2_index] = cdp_inv_f_list_start_read_end[cdp_a_loop];  
-	    cdp_inv_f_list2_end_read_start[cdp_inv_f_list2_index] = cdp_inv_f_list_end_read_start[cdp_a_loop];  
-	    cdp_inv_f_list2_end_read_end[cdp_inv_f_list2_index] = cdp_inv_f_list_end_read_end[cdp_a_loop];  
-	    cdp_inv_f_list2_index += 1;
+	    if( cdp_inv_f_list2_index < g_sv_list2_len - 1 ) 
+	    {
+	      cdp_inv_begin = 1;
+	      cdp_first_start = cdp_inv_f_list_start[cdp_a_loop];
+	      cdp_last_start = cdp_inv_f_list_start[cdp_a_loop];
+	      cdp_first_end = cdp_inv_f_list_end[cdp_a_loop];
+	      cdp_last_end = cdp_inv_f_list_end[cdp_a_loop];
+	      cdp_first_dist = cdp_inv_f_list_dist[cdp_a_loop];
+	      cdp_last_dist = cdp_inv_f_list_dist[cdp_a_loop];
+	      cdp_inv_f_list2_start[cdp_inv_f_list2_index] = cdp_inv_f_list_start[cdp_a_loop];
+	      cdp_inv_f_list2_end[cdp_inv_f_list2_index] = cdp_inv_f_list_end[cdp_a_loop];
+	      cdp_inv_f_list2_start_inv[cdp_inv_f_list2_index] = cdp_inv_f_list_start_inv[cdp_a_loop];  
+	      cdp_inv_f_list2_end_inv[cdp_inv_f_list2_index] = cdp_inv_f_list_end_inv[cdp_a_loop];  
+	      cdp_inv_f_list2_dist[cdp_inv_f_list2_index] = cdp_inv_f_list_dist[cdp_a_loop];
+	      cdp_inv_f_list2_start_binom_cdf[cdp_inv_f_list2_index] = cdp_inv_f_list_start_binom_cdf[cdp_a_loop];
+	      cdp_inv_f_list2_start_hez_binom_cdf[cdp_inv_f_list2_index] = cdp_inv_f_list_start_hez_binom_cdf[cdp_a_loop];  
+	      cdp_inv_f_list2_end_binom_cdf[cdp_inv_f_list2_index] = cdp_inv_f_list_end_binom_cdf[cdp_a_loop];
+	      cdp_inv_f_list2_end_hez_binom_cdf[cdp_inv_f_list2_index] = cdp_inv_f_list_end_hez_binom_cdf[cdp_a_loop];  
+	      cdp_inv_f_list2_start_rd[cdp_inv_f_list2_index] = cdp_inv_f_list_start_rd[cdp_a_loop];  
+	      cdp_inv_f_list2_end_rd[cdp_inv_f_list2_index] = cdp_inv_f_list_end_rd[cdp_a_loop];  
+	      cdp_inv_f_list2_start_conc[cdp_inv_f_list2_index] = cdp_inv_f_list_start_conc[cdp_a_loop];
+	      cdp_inv_f_list2_end_conc[cdp_inv_f_list2_index] = cdp_inv_f_list_end_conc[cdp_a_loop];
+	      cdp_inv_f_list2_start_other_len[cdp_inv_f_list2_index] = cdp_inv_f_list_start_other_len[cdp_a_loop];
+	      cdp_inv_f_list2_end_other_len[cdp_inv_f_list2_index] = cdp_inv_f_list_end_other_len[cdp_a_loop];
+	      cdp_inv_f_list2_start_read_start[cdp_inv_f_list2_index] = cdp_inv_f_list_start_read_start[cdp_a_loop];  
+	      cdp_inv_f_list2_start_read_end[cdp_inv_f_list2_index] = cdp_inv_f_list_start_read_end[cdp_a_loop];  
+	      cdp_inv_f_list2_end_read_start[cdp_inv_f_list2_index] = cdp_inv_f_list_end_read_start[cdp_a_loop];  
+	      cdp_inv_f_list2_end_read_end[cdp_inv_f_list2_index] = cdp_inv_f_list_end_read_end[cdp_a_loop];  
+	      cdp_inv_f_list2_index += 1;
+	    }  
+	    
+	    else
+	    {
+	      g_sv_list2_len_over = 1;
+	    }
+	    
 	  }
 	}
       }
@@ -15016,33 +15250,42 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	{
 	  if( cdp_inv_r_list_start[cdp_a_loop] >= 0 && cdp_inv_r_list_end[cdp_a_loop] >= 0 )
 	  {
-	    cdp_inv_begin = 1;
-	    cdp_first_start = cdp_inv_r_list_start[cdp_a_loop];
-	    cdp_last_start = cdp_inv_r_list_start[cdp_a_loop];
-	    cdp_first_end = cdp_inv_r_list_end[cdp_a_loop];
-	    cdp_last_end = cdp_inv_r_list_end[cdp_a_loop];
-	    cdp_first_dist = cdp_inv_r_list_dist[cdp_a_loop];
-	    cdp_last_dist = cdp_inv_r_list_dist[cdp_a_loop];
-	    cdp_inv_r_list2_start[cdp_inv_r_list2_index] = cdp_inv_r_list_start[cdp_a_loop];
-	    cdp_inv_r_list2_end[cdp_inv_r_list2_index] = cdp_inv_r_list_end[cdp_a_loop];
-	    cdp_inv_r_list2_start_inv[cdp_inv_r_list2_index] = cdp_inv_r_list_start_inv[cdp_a_loop];  
-	    cdp_inv_r_list2_end_inv[cdp_inv_r_list2_index] = cdp_inv_r_list_end_inv[cdp_a_loop];  
-	    cdp_inv_r_list2_dist[cdp_inv_r_list2_index] = cdp_inv_r_list_dist[cdp_a_loop];
-	    cdp_inv_r_list2_start_binom_cdf[cdp_inv_r_list2_index] = cdp_inv_r_list_start_binom_cdf[cdp_a_loop];
-	    cdp_inv_r_list2_start_hez_binom_cdf[cdp_inv_r_list2_index] = cdp_inv_r_list_start_hez_binom_cdf[cdp_a_loop];  
-	    cdp_inv_r_list2_end_binom_cdf[cdp_inv_r_list2_index] = cdp_inv_r_list_end_binom_cdf[cdp_a_loop];
-	    cdp_inv_r_list2_end_hez_binom_cdf[cdp_inv_r_list2_index] = cdp_inv_r_list_end_hez_binom_cdf[cdp_a_loop];  
-	    cdp_inv_r_list2_start_rd[cdp_inv_r_list2_index] = cdp_inv_r_list_start_rd[cdp_a_loop];  
-	    cdp_inv_r_list2_end_rd[cdp_inv_r_list2_index] = cdp_inv_r_list_end_rd[cdp_a_loop];  
-	    cdp_inv_r_list2_start_conc[cdp_inv_r_list2_index] = cdp_inv_r_list_start_conc[cdp_a_loop];
-	    cdp_inv_r_list2_end_conc[cdp_inv_r_list2_index] = cdp_inv_r_list_end_conc[cdp_a_loop];
-	    cdp_inv_r_list2_start_other_len[cdp_inv_r_list2_index] = cdp_inv_r_list_start_other_len[cdp_a_loop];
-	    cdp_inv_r_list2_end_other_len[cdp_inv_r_list2_index] = cdp_inv_r_list_end_other_len[cdp_a_loop];
-	    cdp_inv_r_list2_start_read_start[cdp_inv_r_list2_index] = cdp_inv_r_list_start_read_start[cdp_a_loop];  
-	    cdp_inv_r_list2_start_read_end[cdp_inv_r_list2_index] = cdp_inv_r_list_start_read_end[cdp_a_loop];  
-	    cdp_inv_r_list2_end_read_start[cdp_inv_r_list2_index] = cdp_inv_r_list_end_read_start[cdp_a_loop];  
-	    cdp_inv_r_list2_end_read_end[cdp_inv_r_list2_index] = cdp_inv_r_list_end_read_end[cdp_a_loop];  
-	    cdp_inv_r_list2_index += 1;
+	    if( cdp_inv_r_list2_index < g_sv_list2_len - 1 )  
+	    {
+	      cdp_inv_begin = 1;
+	      cdp_first_start = cdp_inv_r_list_start[cdp_a_loop];
+	      cdp_last_start = cdp_inv_r_list_start[cdp_a_loop];
+	      cdp_first_end = cdp_inv_r_list_end[cdp_a_loop];
+	      cdp_last_end = cdp_inv_r_list_end[cdp_a_loop];
+	      cdp_first_dist = cdp_inv_r_list_dist[cdp_a_loop];
+	      cdp_last_dist = cdp_inv_r_list_dist[cdp_a_loop];
+	      cdp_inv_r_list2_start[cdp_inv_r_list2_index] = cdp_inv_r_list_start[cdp_a_loop];
+	      cdp_inv_r_list2_end[cdp_inv_r_list2_index] = cdp_inv_r_list_end[cdp_a_loop];
+	      cdp_inv_r_list2_start_inv[cdp_inv_r_list2_index] = cdp_inv_r_list_start_inv[cdp_a_loop];  
+	      cdp_inv_r_list2_end_inv[cdp_inv_r_list2_index] = cdp_inv_r_list_end_inv[cdp_a_loop];  
+	      cdp_inv_r_list2_dist[cdp_inv_r_list2_index] = cdp_inv_r_list_dist[cdp_a_loop];
+	      cdp_inv_r_list2_start_binom_cdf[cdp_inv_r_list2_index] = cdp_inv_r_list_start_binom_cdf[cdp_a_loop];
+	      cdp_inv_r_list2_start_hez_binom_cdf[cdp_inv_r_list2_index] = cdp_inv_r_list_start_hez_binom_cdf[cdp_a_loop];  
+	      cdp_inv_r_list2_end_binom_cdf[cdp_inv_r_list2_index] = cdp_inv_r_list_end_binom_cdf[cdp_a_loop];
+	      cdp_inv_r_list2_end_hez_binom_cdf[cdp_inv_r_list2_index] = cdp_inv_r_list_end_hez_binom_cdf[cdp_a_loop];  
+	      cdp_inv_r_list2_start_rd[cdp_inv_r_list2_index] = cdp_inv_r_list_start_rd[cdp_a_loop];  
+	      cdp_inv_r_list2_end_rd[cdp_inv_r_list2_index] = cdp_inv_r_list_end_rd[cdp_a_loop];  
+	      cdp_inv_r_list2_start_conc[cdp_inv_r_list2_index] = cdp_inv_r_list_start_conc[cdp_a_loop];
+	      cdp_inv_r_list2_end_conc[cdp_inv_r_list2_index] = cdp_inv_r_list_end_conc[cdp_a_loop];
+	      cdp_inv_r_list2_start_other_len[cdp_inv_r_list2_index] = cdp_inv_r_list_start_other_len[cdp_a_loop];
+	      cdp_inv_r_list2_end_other_len[cdp_inv_r_list2_index] = cdp_inv_r_list_end_other_len[cdp_a_loop];
+	      cdp_inv_r_list2_start_read_start[cdp_inv_r_list2_index] = cdp_inv_r_list_start_read_start[cdp_a_loop];  
+	      cdp_inv_r_list2_start_read_end[cdp_inv_r_list2_index] = cdp_inv_r_list_start_read_end[cdp_a_loop];  
+	      cdp_inv_r_list2_end_read_start[cdp_inv_r_list2_index] = cdp_inv_r_list_end_read_start[cdp_a_loop];  
+	      cdp_inv_r_list2_end_read_end[cdp_inv_r_list2_index] = cdp_inv_r_list_end_read_end[cdp_a_loop];  
+	      cdp_inv_r_list2_index += 1;
+	    }  
+	    
+	    else
+	    {
+	      g_sv_list2_len_over = 1;
+	    }
+	    
 	  }
 	}
       }      
@@ -15201,20 +15444,29 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	{
 	  if( cdp_ins_list_start[cdp_a_loop] >= 0 && cdp_ins_list_end[cdp_a_loop] >= 0 )
 	  {
-	    cdp_ins_begin = 1;
-	    cdp_ins_list2_start[cdp_ins_list2_index] = cdp_ins_list_start[cdp_a_loop];
-	    cdp_ins_list2_end[cdp_ins_list2_index] = cdp_ins_list_end[cdp_a_loop];
-	    cdp_ins_list2_start_binom_cdf[cdp_ins_list2_index] = cdp_ins_list_start_binom_cdf[cdp_a_loop];
-	    cdp_ins_list2_end_binom_cdf[cdp_ins_list2_index] = cdp_ins_list_end_binom_cdf[cdp_a_loop];
-	    cdp_ins_list2_start_ins[cdp_ins_list2_index] = cdp_ins_list_start_ins[cdp_a_loop];  
-	    cdp_ins_list2_end_ins[cdp_ins_list2_index] = cdp_ins_list_end_ins[cdp_a_loop];  
-	    cdp_ins_list2_start_rd[cdp_ins_list2_index] = cdp_ins_list_start_rd[cdp_a_loop];  
-	    cdp_ins_list2_end_rd[cdp_ins_list2_index] = cdp_ins_list_end_rd[cdp_a_loop];  
-	    cdp_ins_list2_start_conc[cdp_ins_list2_index] = cdp_ins_list_start_conc[cdp_a_loop];
-	    cdp_ins_list2_end_conc[cdp_ins_list2_index] = cdp_ins_list_end_conc[cdp_a_loop];
-	    cdp_ins_list2_start_other_len[cdp_ins_list2_index] = cdp_ins_list_start_other_len[cdp_a_loop];
-	    cdp_ins_list2_end_other_len[cdp_ins_list2_index] = cdp_ins_list_end_other_len[cdp_a_loop];
-	    cdp_ins_list2_index += 1;
+	    if( cdp_ins_list_index < g_sv_list2_len - 1 ) 
+	    {
+	      cdp_ins_begin = 1;
+	      cdp_ins_list2_start[cdp_ins_list2_index] = cdp_ins_list_start[cdp_a_loop];
+	      cdp_ins_list2_end[cdp_ins_list2_index] = cdp_ins_list_end[cdp_a_loop];
+	      cdp_ins_list2_start_binom_cdf[cdp_ins_list2_index] = cdp_ins_list_start_binom_cdf[cdp_a_loop];
+	      cdp_ins_list2_end_binom_cdf[cdp_ins_list2_index] = cdp_ins_list_end_binom_cdf[cdp_a_loop];
+	      cdp_ins_list2_start_ins[cdp_ins_list2_index] = cdp_ins_list_start_ins[cdp_a_loop];  
+	      cdp_ins_list2_end_ins[cdp_ins_list2_index] = cdp_ins_list_end_ins[cdp_a_loop];  
+	      cdp_ins_list2_start_rd[cdp_ins_list2_index] = cdp_ins_list_start_rd[cdp_a_loop];  
+	      cdp_ins_list2_end_rd[cdp_ins_list2_index] = cdp_ins_list_end_rd[cdp_a_loop];  
+	      cdp_ins_list2_start_conc[cdp_ins_list2_index] = cdp_ins_list_start_conc[cdp_a_loop];
+	      cdp_ins_list2_end_conc[cdp_ins_list2_index] = cdp_ins_list_end_conc[cdp_a_loop];
+	      cdp_ins_list2_start_other_len[cdp_ins_list2_index] = cdp_ins_list_start_other_len[cdp_a_loop];
+	      cdp_ins_list2_end_other_len[cdp_ins_list2_index] = cdp_ins_list_end_other_len[cdp_a_loop];
+	      cdp_ins_list2_index += 1;
+	    }  
+	    
+	    else
+	    {
+	      g_sv_list2_len_over = 1;
+	    }
+	    
 	  }
 	}
       }
@@ -15277,19 +15529,28 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	{
 	  if( cdp_ctx_f_list[cdp_a_loop] >= 0 )
 	  {
-	    cdp_ctx_f_begin = 1;
-	    cdp_ctx_f_list2[cdp_ctx_f_list2_index] = cdp_ctx_f_list[cdp_a_loop];
-	    cdp_ctx_f_list2_ctx_f[cdp_ctx_f_list2_index] = cdp_ctx_f_list_ctx_f[cdp_a_loop];  
-	    cdp_ctx_f_list2_binom_cdf[cdp_ctx_f_list2_index] = cdp_ctx_f_list_binom_cdf[cdp_a_loop];
-	    cdp_ctx_f_list2_hez_binom_cdf[cdp_ctx_f_list2_index] = cdp_ctx_f_list_hez_binom_cdf[cdp_a_loop];  
-	    cdp_ctx_f_list2_rd[cdp_ctx_f_list2_index] = cdp_ctx_f_list_rd[cdp_a_loop];  
-	    cdp_ctx_f_list2_conc[cdp_ctx_f_list2_index] = cdp_ctx_f_list_conc[cdp_a_loop];
-	    cdp_ctx_f_list2_other_len[cdp_ctx_f_list2_index] = cdp_ctx_f_list_other_len[cdp_a_loop];
-	    cdp_ctx_f_list2_mchr[cdp_ctx_f_list2_index] = cdp_ctx_f_list_mchr[cdp_a_loop];
-	    cdp_ctx_f_list2_mpos[cdp_ctx_f_list2_index] = cdp_ctx_f_list_mpos[cdp_a_loop];
-	    cdp_ctx_f_list2_read_start[cdp_ctx_f_list2_index] = cdp_ctx_f_list_read_start[cdp_a_loop];  
-	    cdp_ctx_f_list2_read_end[cdp_ctx_f_list2_index] = cdp_ctx_f_list_read_end[cdp_a_loop];  
-	    cdp_ctx_f_list2_index += 1;
+	    if( cdp_ctx_f_list2_index < g_sv_list2_len - 1 )  
+	    {
+	      cdp_ctx_f_begin = 1;
+	      cdp_ctx_f_list2[cdp_ctx_f_list2_index] = cdp_ctx_f_list[cdp_a_loop];
+	      cdp_ctx_f_list2_ctx_f[cdp_ctx_f_list2_index] = cdp_ctx_f_list_ctx_f[cdp_a_loop];  
+	      cdp_ctx_f_list2_binom_cdf[cdp_ctx_f_list2_index] = cdp_ctx_f_list_binom_cdf[cdp_a_loop];
+	      cdp_ctx_f_list2_hez_binom_cdf[cdp_ctx_f_list2_index] = cdp_ctx_f_list_hez_binom_cdf[cdp_a_loop];  
+	      cdp_ctx_f_list2_rd[cdp_ctx_f_list2_index] = cdp_ctx_f_list_rd[cdp_a_loop];  
+	      cdp_ctx_f_list2_conc[cdp_ctx_f_list2_index] = cdp_ctx_f_list_conc[cdp_a_loop];
+	      cdp_ctx_f_list2_other_len[cdp_ctx_f_list2_index] = cdp_ctx_f_list_other_len[cdp_a_loop];
+	      cdp_ctx_f_list2_mchr[cdp_ctx_f_list2_index] = cdp_ctx_f_list_mchr[cdp_a_loop];
+	      cdp_ctx_f_list2_mpos[cdp_ctx_f_list2_index] = cdp_ctx_f_list_mpos[cdp_a_loop];
+	      cdp_ctx_f_list2_read_start[cdp_ctx_f_list2_index] = cdp_ctx_f_list_read_start[cdp_a_loop];  
+	      cdp_ctx_f_list2_read_end[cdp_ctx_f_list2_index] = cdp_ctx_f_list_read_end[cdp_a_loop];  
+	      cdp_ctx_f_list2_index += 1;
+	    }  
+	    
+	    else
+	    {
+	      g_sv_list2_len_over = 1;
+	    }
+	    
 	  }
 	}
       }
@@ -15340,19 +15601,28 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	{
 	  if( cdp_ctx_r_list[cdp_a_loop] >= 0 )
 	  {
-	    cdp_ctx_r_begin = 1;
-	    cdp_ctx_r_list2[cdp_ctx_r_list2_index] = cdp_ctx_r_list[cdp_a_loop];
-	    cdp_ctx_r_list2_ctx_r[cdp_ctx_r_list2_index] = cdp_ctx_r_list_ctx_r[cdp_a_loop];  
-	    cdp_ctx_r_list2_binom_cdf[cdp_ctx_r_list2_index] = cdp_ctx_r_list_binom_cdf[cdp_a_loop];
-	    cdp_ctx_r_list2_hez_binom_cdf[cdp_ctx_r_list2_index] = cdp_ctx_r_list_hez_binom_cdf[cdp_a_loop];  
-	    cdp_ctx_r_list2_rd[cdp_ctx_r_list2_index] = cdp_ctx_r_list_rd[cdp_a_loop];  
-	    cdp_ctx_r_list2_conc[cdp_ctx_r_list2_index] = cdp_ctx_r_list_conc[cdp_a_loop];
-	    cdp_ctx_r_list2_other_len[cdp_ctx_r_list2_index] = cdp_ctx_r_list_other_len[cdp_a_loop];
-	    cdp_ctx_r_list2_mchr[cdp_ctx_r_list2_index] = cdp_ctx_r_list_mchr[cdp_a_loop];
-	    cdp_ctx_r_list2_mpos[cdp_ctx_r_list2_index] = cdp_ctx_r_list_mpos[cdp_a_loop];
-	    cdp_ctx_r_list2_read_start[cdp_ctx_r_list2_index] = cdp_ctx_r_list_read_start[cdp_a_loop];  
-	    cdp_ctx_r_list2_read_end[cdp_ctx_r_list2_index] = cdp_ctx_r_list_read_end[cdp_a_loop];  
-	    cdp_ctx_r_list2_index += 1;
+	    if( cdp_ctx_r_list2_index < g_sv_list2_len - 1 )  
+	    {
+	      cdp_ctx_r_begin = 1;
+	      cdp_ctx_r_list2[cdp_ctx_r_list2_index] = cdp_ctx_r_list[cdp_a_loop];
+	      cdp_ctx_r_list2_ctx_r[cdp_ctx_r_list2_index] = cdp_ctx_r_list_ctx_r[cdp_a_loop];  
+	      cdp_ctx_r_list2_binom_cdf[cdp_ctx_r_list2_index] = cdp_ctx_r_list_binom_cdf[cdp_a_loop];
+	      cdp_ctx_r_list2_hez_binom_cdf[cdp_ctx_r_list2_index] = cdp_ctx_r_list_hez_binom_cdf[cdp_a_loop];  
+	      cdp_ctx_r_list2_rd[cdp_ctx_r_list2_index] = cdp_ctx_r_list_rd[cdp_a_loop];  
+	      cdp_ctx_r_list2_conc[cdp_ctx_r_list2_index] = cdp_ctx_r_list_conc[cdp_a_loop];
+	      cdp_ctx_r_list2_other_len[cdp_ctx_r_list2_index] = cdp_ctx_r_list_other_len[cdp_a_loop];
+	      cdp_ctx_r_list2_mchr[cdp_ctx_r_list2_index] = cdp_ctx_r_list_mchr[cdp_a_loop];
+	      cdp_ctx_r_list2_mpos[cdp_ctx_r_list2_index] = cdp_ctx_r_list_mpos[cdp_a_loop];
+	      cdp_ctx_r_list2_read_start[cdp_ctx_r_list2_index] = cdp_ctx_r_list_read_start[cdp_a_loop];  
+	      cdp_ctx_r_list2_read_end[cdp_ctx_r_list2_index] = cdp_ctx_r_list_read_end[cdp_a_loop];  
+	      cdp_ctx_r_list2_index += 1;
+	    }  
+	    
+	    else
+	    {
+	      g_sv_list2_len_over = 1;
+	    }
+	    
 	  }
 	}
       }
@@ -15726,7 +15996,40 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       
       printf("before free SV lists\n");
     }
+    
+    
+    if( g_sv_list_len_over == 1 )
+    {
+      printf("WARNING: Breakpoint array for chromosome is full. Use -G to increase array size.\n");
+      g_sv_list_len_over = 0;
+    }
+    if( g_sv_list2_len_over == 1 )
+    {
+      printf("WARNING: SV array for chromosome is full. Use -G to increase array size.\n");
+      g_sv_list2_len_over = 0;
+    }
+    
 
+    
+    printf("cdp_snv_list_index %d\n", cdp_snv_list_index);
+    printf("cdp_ins_list_index %d\n", cdp_ins_list_index);
+    printf("cdp_indel_i_list_index %d\n", cdp_indel_i_list_index);
+    printf("cdp_indel_d_list_index %d\n", cdp_indel_d_list_index);
+    printf("cdp_dup_list_index %d\n", cdp_dup_list_index);
+    printf("cdp_del_list_index %d\n", cdp_del_list_index);
+    
+    printf("cdp_inv_f_list_index %d\n", cdp_inv_f_list_index);  
+    printf("cdp_inv_r_list_index %d\n", cdp_inv_r_list_index);  
+
+    printf("cdp_ins_list2_index %d\n", cdp_ins_list2_index);
+    printf("cdp_dup_list2_index %d\n", cdp_dup_list2_index);
+    printf("cdp_del_list2_index %d\n", cdp_del_list2_index);
+    
+    printf("cdp_inv_f_list2_index %d\n", cdp_inv_f_list2_index);  
+    printf("cdp_inv_r_list2_index %d\n", cdp_inv_r_list2_index);  
+    
+
+    printf("before free SV lists\n");  
 
     
     
@@ -16635,6 +16938,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 			}
 		      }
 		      
+		      printf("before free del rd\n");  
 
 		      free(caf_del_list_start);
 		      free(caf_del_list_end);
@@ -16644,6 +16948,8 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		      free(caf_del_list_cn);
 		      free(caf_del_list_cn_stdev);
 
+		      printf("before free dup rd\n");  
+		      
 		      free(caf_dup_list_start);
 		      free(caf_dup_list_end);
 		      free(caf_dup_list_ref);
@@ -16654,6 +16960,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      }
       }
       
+      printf("before free block\n");  
       
       
       free(caf_block_rd_list);
@@ -16662,6 +16969,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       
     }  
 
+    printf("before free rmdup\n");  
     
     free(cdp_rmdup_svtype_list);
     free(cdp_rmdup_tlen_list);
@@ -16670,6 +16978,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_rmdup_mchr_list);
     
 
+    printf("before free ctx\n");  
     
     free(cdp_ctx_r_list2_read_end);
     free(cdp_ctx_r_list2_read_start);
@@ -16695,6 +17004,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_ctx_f_list2_ctx_f);
     free(cdp_ctx_f_list2);
 
+    printf("before free inv\n");  
     
     free(cdp_inv_r_list2_end_read_end);
     free(cdp_inv_r_list2_end_read_start);
@@ -16741,6 +17051,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 
 
 
+    printf("before free del\n");  
     free(cdp_del_list2_end_read_end);
     free(cdp_del_list2_end_read_start);
     free(cdp_del_list2_start_read_end);
@@ -16761,6 +17072,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_del_list2_start_del_f);
     free(cdp_del_list2_start);
     
+    printf("before free dup\n");  
     free(cdp_dup_list2_end_read_end);
     free(cdp_dup_list2_end_read_start);
     free(cdp_dup_list2_start_read_end);
@@ -16781,6 +17093,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_dup_list2_start_dup_r);
     free(cdp_dup_list2_start);
     
+    printf("before free ins\n");  
     free(cdp_ins_list2_end_other_len);
     free(cdp_ins_list2_start_other_len);
     free(cdp_ins_list2_end_binom_cdf);
@@ -16794,6 +17107,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_ins_list2_start_ins);  
     free(cdp_ins_list2_start);
     
+    printf("before free ctx1\n");  
     free(cdp_ctx_r_list_read_end);
     free(cdp_ctx_r_list_read_start);
     free(cdp_ctx_r_list_other_len);
@@ -16818,6 +17132,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_ctx_f_list_ctx_f);
     free(cdp_ctx_f_list);
 
+    printf("before free indel1\n");  
     free(cdp_indel_d_list_end_sc);
     free(cdp_indel_d_list_start_sc);
     free(cdp_indel_d_list_end_rd);
@@ -16856,6 +17171,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_indel_i_list_seq);
     
     
+    printf("before free inv1\n");  
     
     free(cdp_inv_r_list_end_read_end);
     free(cdp_inv_r_list_end_read_start);
@@ -16864,6 +17180,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_inv_r_list_end_other_len);
     free(cdp_inv_r_list_start_other_len);
     free(cdp_inv_r_list_dist);
+    printf("before free inv1_hez\n");  
     free(cdp_inv_r_list_end_hez_binom_cdf);  
     free(cdp_inv_r_list_end_binom_cdf);
     free(cdp_inv_r_list_end_conc);
@@ -16877,6 +17194,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_inv_r_list_start_inv);
     free(cdp_inv_r_list_start);
     
+    printf("before free invf1\n");  
     free(cdp_inv_f_list_end_read_end);
     free(cdp_inv_f_list_end_read_start);
     free(cdp_inv_f_list_start_read_end);
@@ -16884,17 +17202,29 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_inv_f_list_end_other_len);
     free(cdp_inv_f_list_start_other_len);
     free(cdp_inv_f_list_dist);
+    printf("before free invf1_hez\n");  
     free(cdp_inv_f_list_end_hez_binom_cdf);  
+    printf("before free invf1_hez2\n");  
     free(cdp_inv_f_list_end_binom_cdf);
+    printf("before free invf1_hez3\n");  
     free(cdp_inv_f_list_end_conc);
+    printf("before free invf1_hez4\n");  
     free(cdp_inv_f_list_end_rd);  
+    printf("before free invf1_hez5\n");  
     free(cdp_inv_f_list_end_inv);
+    printf("before free invf1_hez6\n");  
     free(cdp_inv_f_list_end);
+    printf("before free invf1_hez7\n");  
     free(cdp_inv_f_list_start_hez_binom_cdf);  
+    printf("before free invf1_hez8\n");  
     free(cdp_inv_f_list_start_binom_cdf);
+    printf("before free invf1_hez9\n");  
     free(cdp_inv_f_list_start_conc);
+    printf("before free invf1_hez10\n");  
     free(cdp_inv_f_list_start_rd);  
+    printf("before free invf1_hez11\n");  
     free(cdp_inv_f_list_start_inv);
+    printf("before free invf1_hez12\n");  
     free(cdp_inv_f_list_start);
     
     
@@ -16902,6 +17232,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 
 
     
+    printf("before free del1\n");  
     free(cdp_del_list_end_read_end);
     free(cdp_del_list_end_read_start);
     free(cdp_del_list_start_read_end);
@@ -16922,6 +17253,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_del_list_start_del_f);
     free(cdp_del_list_start);
     
+    printf("before free dup1\n");  
     free(cdp_dup_list_end_read_end);
     free(cdp_dup_list_end_read_start);
     free(cdp_dup_list_start_read_end);
@@ -16942,6 +17274,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_dup_list_start_dup_r);
     free(cdp_dup_list_start);
     
+    printf("before free ins1\n");  
     free(cdp_ins_list_end_other_len);
     free(cdp_ins_list_start_other_len);
     free(cdp_ins_list_end_binom_cdf);
@@ -16955,6 +17288,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_ins_list_start_ins);  
     free(cdp_ins_list_start);
     
+    printf("before free snv\n");  
     
     
     free(cdp_snv_start_hez_binom_cdf_list);
@@ -17058,6 +17392,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       printf("after free SNV counters\n");
     }
     
+    printf("before free other\n");  
     
     for(cdp_other_loop=0;cdp_other_loop<g_other_len;cdp_other_loop++)
     {
@@ -17097,6 +17432,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     
 
 
+    printf("before free onebase1\n");  
     
     free(cdp_one_base_read_count_all);
     free(cdp_one_base_mq_read_count);
@@ -17119,6 +17455,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_one_base_ctx_sc_right);
     free(cdp_one_base_ctx_sc_left);
     
+    printf("before free onebase2\n");  
     free(cdp_one_base_indel_d_r_rd);  
     free(cdp_one_base_indel_d_rdist);
     free(cdp_one_base_indel_d_r);
@@ -17150,6 +17487,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     
     
     
+    printf("before free onebase3\n");  
     free(cdp_one_base_inv_r2_read_end);
     free(cdp_one_base_inv_f2_read_end);
     free(cdp_one_base_inv_r2_read_start);
@@ -17190,6 +17528,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_one_base_del_r);
     free(cdp_one_base_del_f);
     
+    printf("before free onebase4\n");  
     free(cdp_one_base_ins);
     free(cdp_one_base_sc_rd);
     free(cdp_one_base_sc_right_rd);
@@ -17204,6 +17543,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     
     
 
+    printf("before free rd\n");  
     
     free(caf_repeat_type_list);  
     free(caf_repeat_start_list);  
@@ -17224,6 +17564,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       printf("before free tumor SV predictions\n");
     }
 
+    printf("before free tumor\n");  
     
     
     free(cdp_tumor_snv_start_hez_binom_cdf); 
@@ -17272,6 +17613,8 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_tumor_snv_base);
     
     
+    free(cdp_tumor_end_hez_binom_cdf);  
+    free(cdp_tumor_start_hez_binom_cdf);  
     free(cdp_tumor_end_read_end);
     free(cdp_tumor_end_read_start);
     free(cdp_tumor_start_read_end);
@@ -17311,6 +17654,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_tumor_type);
     
 
+    printf("after free tumor\n");  
     if( g_internal == 1 )  
     {
       printf("after free tumor SV predictions\n");
@@ -19551,6 +19895,7 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
 {
   samfile_t *fds_bam_file = NULL;
   
+  int fds_one_base_index_start = g_one_base_rd_len/4 + 1;  
   char *temp_chr_fasta = malloc(g_max_chr_fasta_len + 1);
   if( temp_chr_fasta == NULL )  
   {
@@ -19559,7 +19904,7 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
   }
   char fds_fasta_line[1000];
   long fds_a_loop, fds_b_loop;
-  long fds_c_loop, fds_bam_a;  
+  
   long fds_chr_fasta_len = 0;
   
   int fds_fasta_line_len = 0;
@@ -19592,7 +19937,7 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
   FILE *fds_results_file = NULL;  
   FILE *fds_results_file_ctx = NULL;  
   char fds_results_file_name_ctx[1024];  
-  char partial_results_file_name_ctx[1024];  
+  
   char fds_ctx_string[4] = "ctx";  
   
       fds_results_file = fopen(fds_results_file_name, "w");  
@@ -19915,7 +20260,7 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
   for(fds_a_loop=0;fds_a_loop<fds_num_chr;fds_a_loop++)  
   {
     
-    fds_bam_a = fds_a_loop;
+    
     
 
 
@@ -20088,7 +20433,10 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
 
   
 	
-	count_discordant_pairs(fds_bam_file, fds_bam_file_name, &temp_chr_fasta[0], fds_chr_fasta_len, g_chr_names[fds_chr_match], g_chr_names_len[fds_chr_match], fds_results_file, fds_tumor_sv_file_name, fds_tumor_len, fds_results_file_ctx, fdd_sample_high_mq_rd_list, fdd_sample_low_mq_rd_list, fdd_sample_repeat_rd_list, &fdd_low_mq_index[0], &fdd_high_mq_index[0], &fdd_low_mq_index_all[0], &fdd_high_mq_index_all[0], fdd_pval2sd_pval_list, fdd_pval2sd_sd_list, fdd_pval2sd_list_len, fds_results_file_name);  
+	if( fds_chr_fasta_len > fds_one_base_index_start + g_overlap_mult*g_insert_max_size )  
+	{
+	  count_discordant_pairs(fds_bam_file, fds_bam_file_name, &temp_chr_fasta[0], fds_chr_fasta_len, g_chr_names[fds_chr_match], g_chr_names_len[fds_chr_match], fds_results_file, fds_tumor_sv_file_name, fds_tumor_len, fds_results_file_ctx, fdd_sample_high_mq_rd_list, fdd_sample_low_mq_rd_list, fdd_sample_repeat_rd_list, &fdd_low_mq_index[0], &fdd_high_mq_index[0], &fdd_low_mq_index_all[0], &fdd_high_mq_index_all[0], fdd_pval2sd_pval_list, fdd_pval2sd_sd_list, fdd_pval2sd_list_len, fds_results_file_name);  
+	}
 	
 	if( g_internal == 1 )  
 	{
@@ -20890,8 +21238,8 @@ int main(int argc, char *argv[])
 #endif
 	long m_a_loop; 
 	int m_b_loop, m_c_loop; 
-	int m_temp_chr, m_max_chr;  
-	long m_max_chr_len;  
+	
+	
 	
 	char exec_path[1024];
 	
@@ -20919,7 +21267,9 @@ int main(int argc, char *argv[])
 	 
 	
 	int opt = 0;
-	while ((opt = getopt (argc, argv, "Z:W:X:Q:A:Y:B:D:E:K:N:V:U:L:F:SMi:r:o:p:q:s:v:g:l:d:b:n:a:y:z:e:fj:k:m:u:w:x:h")) != -1)  
+	while ((opt = getopt (argc, argv, "Z:W:X:Q:A:Y:B:D:E:K:N:V:U:L:F:SMG:i:r:o:p:q:s:t:v:g:l:d:b:n:a:y:z:e:fj:k:m:u:w:x:h")) != -1)  
+	
+	
 	
 	
 	
@@ -20933,6 +21283,12 @@ int main(int argc, char *argv[])
 			
 			
 			  
+			
+			
+			case 'G':
+				g_sv_list_len = atoi(optarg);
+				g_sv_list2_len = g_sv_list_len / 10;
+				break;
 			
 			
 			case 'M':
@@ -21006,6 +21362,10 @@ int main(int argc, char *argv[])
 				break;
 			
 			
+			case 't':
+				tumor_sv_file_name = optarg;
+				break;
+			
 			
 			case 'v':
 				g_pval_threshold = atof(optarg);
@@ -21076,7 +21436,8 @@ int main(int argc, char *argv[])
 
 
 			case '?':
-				if ( optopt == 'i' || optopt == 'r' || optopt == 'o' || optopt == 'p' || optopt == 'q' || optopt == 's' || optopt == 'v' || optopt == 'g' || optopt == 'l' || optopt == 'd' || optopt == 'b' || optopt == 'n' || optopt == 'a' || optopt == 'y' || optopt == 'z' || optopt == 'e' || optopt == 'j' || optopt == 'k' || optopt == 'm' || optopt == 'u' || optopt == 'w' || optopt == 'x' )  
+				if ( optopt == 'i' || optopt == 'r' || optopt == 'o' || optopt == 'p' || optopt == 'q' || optopt == 's' || optopt == 't' || optopt == 'v' || optopt == 'g' || optopt == 'l' || optopt == 'd' || optopt == 'b' || optopt == 'n' || optopt == 'a' || optopt == 'y' || optopt == 'z' || optopt == 'e' || optopt == 'j' || optopt == 'k' || optopt == 'm' || optopt == 'u' || optopt == 'w' || optopt == 'x' )  
+				
 				
 				
 				
@@ -21091,6 +21452,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	g_pval_threshold1 = g_pval_threshold;  
 	g_rd_min_mapq = g_min_mapq;  
 	
 	
