@@ -16,8 +16,6 @@
  *
  */
 
-
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
@@ -49,6 +47,7 @@
 
 
 
+static int ccount = 0;  
 
 #ifdef DO_TIMING
 static double timers[11+2*max_chr_names];  
@@ -65,7 +64,564 @@ double gettime()
 	return tv.tv_usec * 1e-6 + (tv.tv_sec - basetime);
 }
 
+#define MAX_REGION 300000000
+#define IO_REGION  1000000
+#define NUM_REGIONS (MAX_REGION/IO_REGION+1)
+#define IO_BUFFER  (10*1000000)
+#define MAX_READS  50000
+#define CHROMOSOMES_IN_PARALLEL 256
 
+
+int g_sub_region_size = MAX_REGION;
+int g_sub_region_overlap = 10000;
+int g_sub_region_start = 0;
+int g_sub_region_end = MAX_REGION;
+
+
+
+typedef struct single_io {
+    bamFile bam_file;
+    bam_header_t *bam_hdr;
+    bam_index_t *bam_idx;
+    int range_id;
+    int range_bottom;
+    int range_top;
+    unsigned int read_in;
+    unsigned int read_out;
+    unsigned int read_max;
+    unsigned int reads[MAX_READS];
+    unsigned int len[MAX_READS];
+    unsigned int buffer_in;
+    unsigned int buffer_out;
+    unsigned int buffer_max;
+    char buffer[IO_BUFFER];
+    volatile int completed;
+    volatile int ignore_all;
+    volatile int done_reading;
+    volatile int end_of_file;
+} single_io_t;
+
+
+
+int init_reads(single_io_t *s)
+{
+    s->read_in = s->read_out = 0;
+    s->read_max = MAX_READS;
+    s->buffer_in = s->buffer_out = 0;
+    s->buffer_max = IO_BUFFER;
+    s->completed = 0;
+    s->done_reading = 0;
+    return 0;
+}
+
+int single_free_reads(single_io_t *s)
+{
+    if (s->read_in < s->read_out)
+	return s->read_out - s->read_in;
+    return MAX_READS - (s->read_in - s->read_out);
+}
+
+
+
+int insert_read(single_io_t *s, const bam1_t *b)
+{
+    unsigned int size = sizeof(bam1_t);
+    if (b != NULL)
+	size += b->data_len;
+    size = ((size + 7) / 8) * 8;
+
+    if (single_free_reads(s) <= 2)
+	return -1;
+
+    if (s->buffer_in < s->buffer_out) {
+	if (s->buffer_out - s->buffer_in <= size)
+	    return -1;
+    }
+    else {
+	if (IO_BUFFER - s->buffer_in <= size) {
+	    if (s->buffer_out <= size)
+		return -1;
+	    s->buffer_in = 0;
+	}
+    }
+    memcpy(s->buffer + s->buffer_in, b, sizeof(bam1_t));
+    if (b->data && b->data_len)
+	memcpy(s->buffer + s->buffer_in + sizeof(bam1_t), b->data, b->data_len);
+    s->reads[s->read_in] = s->buffer_in;
+    s->len[s->read_in] = size;
+    s->buffer_in += size;
+    if ( s->read_in+1 >= MAX_READS)
+	s->read_in = 0;
+    else
+	s->read_in++;
+    return 0;
+}
+
+
+
+int get_read(single_io_t *s, bam1_t *b)
+{
+    if (b == NULL)
+	return -1;
+
+    unsigned int len = b->m_data;
+    uint8_t *data = b->data;
+    
+    if (s->read_out == s->read_in)
+	return -1;
+
+    memcpy(b, s->buffer + s->reads[s->read_out], sizeof(bam1_t));
+    b->m_data = len;
+    b->data = data;
+
+    if (b->data_len > 0) {
+	if (data == NULL) {
+	    len = ((b->data_len + 31) / 32) * 32;
+	    b->data = malloc(len);
+	    b->m_data = len;
+	}
+	else if (b->data_len > b->m_data) {
+	    len = ((b->data_len + 31) / 32) * 32;
+	    b->data = realloc(b->data, len);
+	    b->m_data = len;
+	}
+	memcpy(b->data, s->buffer + s->reads[s->read_out] + sizeof(bam1_t), b->data_len);
+    }
+    s->buffer_out = s->reads[s->read_out] + s->len[s->read_out];
+    if ( s->read_out+1 >= MAX_READS)
+	s->read_out = 0;
+    else
+	s->read_out++;
+    return 0;
+}
+
+
+
+int my_back_reader(const bam1_t *b, void *data)
+{
+    single_io_t *s = (single_io_t *)data;
+
+    while (!s->ignore_all) {
+	if (insert_read(s, b) >= 0)
+	    break;
+	
+    }
+    return 0;
+}
+
+
+
+int my_bam_open(single_io_t *s, char *bam_file_name)
+{
+    s->bam_file = bam_open(bam_file_name, "rb");
+    if (s->bam_file == NULL)
+	return -1;
+    s->bam_hdr = bam_header_read(s->bam_file);
+    s->bam_idx = bam_index_load(bam_file_name); 
+    s->ignore_all = 0;
+    s->end_of_file = 0;
+    init_reads(s);
+    return 0;
+}
+
+
+
+int my_bam_close(single_io_t *s)
+{
+    if (s->bam_idx) {
+	bam_index_destroy(s->bam_idx);
+	s->bam_idx = NULL;
+    }
+    if (s->bam_hdr) {
+	bam_header_destroy(s->bam_hdr);
+	s->bam_hdr = NULL;
+    }
+    if (s->bam_file) {
+	bam_close(s->bam_file);
+	s->bam_file = NULL;
+    }
+    init_reads(s);
+    return 0;
+}
+
+
+
+int my_engage_read(single_io_t *s, int cid, int bottom, int top)
+{
+    if (cid < 0 || cid >= s->bam_hdr->n_targets)
+	return -1;
+
+    init_reads(s);
+    s->range_id     = cid;
+    s->range_bottom = bottom;
+    s->range_top    = top;
+    bam_fetch(s->bam_file, s->bam_idx, cid, bottom, top, s, my_back_reader);
+    s->completed = 1;
+    return 0;
+}
+
+
+
+int my_bam_read(single_io_t *s, bam1_t *b)
+{
+    int rc;
+
+    if (s == NULL || (s->end_of_file && s->read_out == s->read_in) )
+	return -1;
+
+    while (s->done_reading == 1 || (rc = get_read(s,b)) < 0) {
+	if (s->completed == 1 && s->read_out == s->read_in && s->done_reading == 0) {
+	    s->completed = 2;
+	    s->done_reading = 1;
+	}
+	if (s->end_of_file)
+	    return -1;
+	
+    }
+    return 0;
+}
+
+
+
+int my_before_reading(single_io_t *s)
+{
+    init_reads(s);
+    s->ignore_all = 0;
+    s->end_of_file = 0;
+    return 0;
+}
+
+
+
+int my_stop_reading(single_io_t *s)
+{
+    s->ignore_all = 1;
+    return 0;
+}
+
+
+
+int single_chromosome_read(single_io_t *s, int cid)
+{
+    s->end_of_file = 0;
+#ifdef READ_IN_CHUNKS
+    int i = g_sub_region_start;
+    while (i < g_sub_region_end) {
+	int size = (i + IO_REGION >= g_sub_region_end) ? g_sub_region_end - i : IO_REGION;
+	my_engage_read(s, cid, i, i + size - 1);
+	i += size;
+	while (s->done_reading == 0) {
+	    
+	}
+	if (s->ignore_all)
+	    break;
+    } 
+#else
+    my_engage_read(s, cid, g_sub_region_start, g_sub_region_end-1);
+#endif
+    s->end_of_file = 1;
+    return 0;
+}
+
+
+
+single_io_t g_single;
+int g_parallel_mode = 0;
+int g_one_chromosome = -1;
+int g_sub_child_number = 0;
+int g_save_argc = 0;
+char **g_save_argv = NULL;
+
+#define CHILD_UNFINISHED (-1)
+#define MAX_SUB_PROCESSES 10000
+
+int g_child_max = 0;
+int *g_slots_used = NULL;
+int *g_child_list = NULL;
+int *g_child_done = NULL;
+int *g_child_count = NULL;
+
+int *g_subchild_slot = NULL; 
+int *g_subchild_list = NULL;
+int *g_subchild_status = NULL;
+
+int g_pid_list_index = 0;
+
+int g_cpulist[CHROMOSOMES_IN_PARALLEL*2];
+
+
+
+void cpus_print_error(char *reason, char *envp, char *errp)
+{
+  printf("Error in AFFINITY: %s in GROM_AFFINITY\n",reason);
+  printf("         AFFINITY: %s\n",envp);
+  printf("         AFFINITY:%*c^\n", (int)(errp - envp)+1, ' ');
+  exit(1);
+}
+
+int get_number_of_cpus(void)
+{
+    int c;
+
+#ifdef _SC_NPROCESSORS_ONLN
+    c = sysconf(_SC_NPROCESSORS_ONLN);
+    if (c < 0)
+	c = sizeof(g_cpulist)/sizeof(int);
+#else
+    c = sizeof(g_cpulist)/sizeof(int);
+#endif
+    return c;
+}
+
+
+
+int get_affinity_map(void)
+{
+  int num_cpus = get_number_of_cpus();
+  int cpu_count = 0;
+  int first_cpu;
+  int last_cpu;
+  int stride;
+  int count;
+  int max = sizeof(g_cpulist)/sizeof(int);
+  char *envp, *strp, *endp;
+
+  for (count = 0; count < max; count++)
+      g_cpulist[count] = count % num_cpus;
+
+  if (NULL == (envp = strp = getenv("GROM_AFFINITY")))
+    return 0;
+
+  do {
+    stride = 1;
+    first_cpu = last_cpu = strtol(strp, &endp, 0);
+    if (strp != endp && first_cpu >= 0 && first_cpu < num_cpus) {
+      strp = endp;
+      if ('-' == *strp) {
+        last_cpu = strtol(++strp, &endp, 0);
+        if (strp != endp && last_cpu >= 0 && last_cpu < num_cpus) {
+          strp = endp;
+          if (last_cpu < first_cpu)
+            stride = -1;
+        }
+        else {
+          cpus_print_error("invalid CPU number", envp, strp);
+          return 0;
+        }
+      }
+      count = (last_cpu - first_cpu) / stride + 1;
+      while (cpu_count < max && count--) {
+        g_cpulist[cpu_count++] = first_cpu;
+        first_cpu += stride;
+      }
+      while (' ' == *strp || '\t' == *strp || ',' == *strp)
+        strp++;
+    }
+    else {
+      cpus_print_error("invalid CPU number", envp, strp);
+      return 0;
+    }
+  } while ('\0' != *strp);
+
+  for (count = cpu_count; count < max; count++)
+      g_cpulist[count] = g_cpulist[count % cpu_count];
+
+  return 1;
+}
+
+
+
+void allcate_children(int max)
+{
+    int i;
+
+    g_child_max = max;
+    g_slots_used = calloc(g_parallel_mode, sizeof(int));
+    g_child_list = calloc(g_child_max, sizeof(int));
+    g_child_done = calloc(g_child_max, sizeof(int));
+    g_child_count = calloc(g_child_max, sizeof(int));
+    g_subchild_slot = calloc(MAX_SUB_PROCESSES, sizeof(int));
+    g_subchild_list = calloc(MAX_SUB_PROCESSES, sizeof(int));
+    g_subchild_status = calloc(MAX_SUB_PROCESSES, sizeof(int));
+
+    if (g_slots_used == NULL || g_child_list == NULL || g_child_done == NULL || g_child_count == NULL || g_subchild_slot == NULL || g_subchild_list == NULL ||g_subchild_status == NULL) {
+	printf("Error: Unable to allocate memory for children list.\n");
+	exit(1);
+    }
+    for (i = 0; i < MAX_SUB_PROCESSES; i++)
+	g_subchild_status[i] = CHILD_UNFINISHED;
+
+    get_affinity_map();
+}
+
+
+
+void check_parallel_slots(void)
+{
+    int i, j;
+    int pid;
+    int status;
+    int count = g_parallel_mode;
+
+    while (count >= g_parallel_mode) {
+	count = 0;
+	for (i = 0; i < g_child_max; i++) {
+	    for (j = 0; j < g_child_count[i]; j++) {
+		if (g_subchild_list[g_child_list[i]+j] != 0 && g_subchild_status[g_child_list[i]+j] == CHILD_UNFINISHED)
+		    count++;
+	    }
+	}
+	if (count >= g_parallel_mode) {
+	    pid = wait(&status);
+	    if (pid > 0) {
+		for (i = 0; i < g_child_max; i++) {
+		    for (j = 0; j < g_child_count[i]; j++) {
+			if (pid == g_subchild_list[g_child_list[i]+j]) {
+			    g_subchild_status[g_child_list[i]+j] = status;
+			    g_slots_used[g_subchild_slot[g_child_list[i]+j]] = 0;
+			    printf("Found completed child %d at %d/%d. clearing slot %d\n", pid, i, j, g_subchild_slot[g_child_list[i]+j]);
+			    pid = 0;
+			    break;
+			}
+		    }
+		    if (pid == 0)
+			break;
+		}
+	    }
+	}
+    }
+}
+
+
+
+int get_free_slot(void)
+{
+    int i;
+
+    while ( 1 ) {
+	for (i = 0; i < g_parallel_mode; i++) {
+	    if (g_slots_used[i] == 0) {
+		return i;
+	    }
+	}
+	check_parallel_slots();
+    }
+}
+
+
+
+void save_new_child(int index, int pid, int slot)
+{
+    int i;
+    if (g_child_count[index] == 0)
+	g_child_list[index] = g_pid_list_index;
+    i = g_child_list[index]+g_child_count[index];
+    g_subchild_list[i] = pid;
+    g_subchild_slot[i] = slot;
+    g_slots_used[slot] = pid;
+    g_child_count[index]++;
+    g_pid_list_index++;
+}
+
+
+
+int wait_for_child(int index)
+{
+    int i;
+    int status = 0;
+
+    for (i = 0; i < g_child_count[index]; i++) {
+	if (g_subchild_status[g_child_list[index]+i] == CHILD_UNFINISHED) {
+	    waitpid(g_subchild_list[g_child_list[index]+i], &g_subchild_status[g_child_list[index]+i], 0);
+	    g_slots_used[g_subchild_slot[g_child_list[index]+i]] = 0;
+	}
+    }
+    for (i = 0; i < g_child_count[index]; i++) {
+	status = g_subchild_status[g_child_list[index]+i];
+	if (WEXITSTATUS(status) > 0)
+	    return status;
+    }
+    return status;
+}
+
+
+
+int launch_one_chromosome(int chr, char *chr_name, long size)
+{
+    int i, rc, pid, slot;
+    int subchild = 0;
+    int region_start = 0;
+    int region_end;
+    char my_chr[100];
+
+    while (size > 0) {
+	region_start = subchild * g_sub_region_size;
+	if (size > g_sub_region_size / 4 * 5) {
+	    region_end = (subchild + 1) * g_sub_region_size + g_sub_region_overlap;
+	    size -= g_sub_region_size;
+	} else {
+	    region_end = region_start + size;
+	    size = 0;
+	}
+	sprintf(my_chr, "%d,%d,%d,%d", chr, subchild, region_start, region_end);
+	slot = get_free_slot();
+	pid = fork();
+	if (pid == 0) {
+	    
+	    char placement[100];
+	    char **new_argv = calloc(g_save_argc + 1, sizeof(char *));
+	    sprintf(placement,"GOMP_CPU_AFFINITY=%d,%d", g_cpulist[slot*2], g_cpulist[slot*2+1]);
+	    putenv(placement);
+	    putenv("OMP_NUM_THREADS=2");
+	    for (i = 0; i < g_save_argc; i++) {
+		new_argv[i] = g_save_argv[i];
+		if (strcmp(g_save_argv[i], "-P") == 0) {
+		    new_argv[i] = "-c";
+		    new_argv[++i] = my_chr;
+		}
+	    }
+	    printf("Launching background GROM for single chromosome '%s' (%s) on CPUs %d,%d\n", chr_name, my_chr, g_cpulist[slot*2], g_cpulist[slot*2+1]);
+	    rc = execv(g_save_argv[0], new_argv);
+	    if (rc == -1) {
+		printf("Unable to execute GROM for single chromosome '%s' (%s)\n", chr_name, my_chr);
+		exit(1);
+	    }
+	}
+	else if (pid == -1) {
+	    printf("Error lanuching GROM for single chromosome '%s' (%s)\n", chr_name, my_chr);
+	    exit(1);
+	}
+	save_new_child(chr, pid, slot);
+	subchild++;
+	printf("*** %d Lanuched '%s' (%s) on slot %d\n", pid, chr_name, my_chr, slot);
+    }
+    return pid;
+}
+
+
+
+void add_one_chromosome_result(int chr, char *chr_name, char *results_name, long size)
+{
+    int i, rc, status;
+    char command[4096];
+    char ctx_string[4] = "ctx";  
+
+    if (g_child_count[chr] == 0)
+	return;
+
+    status = wait_for_child(chr);
+    rc = WEXITSTATUS(status);
+    if (rc > 0) {
+	printf("Error: Background process for processing chromosome '%s' failed to complete : %08x\n", chr_name, status);
+	exit(1);
+    }
+    for (i=0; i < g_child_count[chr]; i++) {
+	sprintf(command, "cat %s.%s-%d >>%s ; rm -f %s.%s-%d", results_name, chr_name, i, results_name, results_name, chr_name, i);
+	system(command);
+	sprintf(command, "cat %s.%s-%d.%s >>%s.%s ; rm -f %s.%s-%d.%s", results_name, chr_name, i, ctx_string, results_name, ctx_string, results_name, chr_name, i, ctx_string);  
+	system(command);  
+    }
+}
 
 
 
@@ -131,7 +687,7 @@ double gettime()
 
 int g_other_types_len = 14;
 char g_other_types[14][20] = {"EMPTY", "DEL FOR", "DEL REV", "DUP FOR", "DUP REV", "INV FOR START", "INV REV START", "INV FOR END", "INV REV END", "CTX FOR", "CTX REV", "INS INDEL", "DEL INDEL FOR", "DEL INDEL REV"};
-char *g_version_name = "GROM, Version 1.0.0\n";
+char *g_version_name = "GROM, Version 1.0.1\n";
 
 int cmpfunc_2dm (const void * a, const void * b);
 int cmpfunc_2d (const void * a, const void * b);
@@ -307,8 +863,8 @@ int g_tumor_sv_type_max_name_len = 10;
 char *g_tumor_separator = "\t";
 char *g_aux_separator = ",";  
 
-int g_sv_types_len = 13;
-char g_sv_types[13][10] = {"DEL", "DUP", "INS", "INV", "INDEL_INS", "INDEL_DEL", "CTX_F", "CTX_R", "INV_F", "INV_R", "SNV", "DEL RD", "DUP RD"};
+int g_sv_types_len = 11;
+char g_sv_types[11][10] = {"DEL", "DUP", "INS", "INV", "INDEL_INS", "INDEL_DEL", "CTX_F", "CTX_R", "INV_F", "INV_R", "SNV"};
 
 int g_normal_sc_range = 3;
 
@@ -422,6 +978,107 @@ int min_dup_inv_pair_distance = 10;
 
 
 
+int my_samread(samfile_t *fp, bam1_t *b)
+{
+    int rc;
+    if (g_parallel_mode > 0) {
+	rc = my_bam_read(&g_single, b);
+	if (rc == 0) rc = 1;
+    }
+    else {
+	rc = samread(fp, b);
+    }
+    return rc;
+}
+
+int save_insert_mean(char *bam_file_name, int insert_mean, int gc_lseq, int insert_min_size, int insert_max_size, long int mapped_reads)
+{
+    char name[1024];
+    FILE *fp;
+
+    strcpy(name, bam_file_name);
+    strcat(name, ".mean");
+    fp = fopen(name,"w");
+    if (fp != NULL) {
+	printf("Saving insert_mean et al to %s\n",name);
+	fprintf(fp,"%d %d %d %d %ld\n",insert_mean, gc_lseq, insert_min_size, insert_max_size, mapped_reads);
+	fclose(fp);
+	return insert_mean;
+    }
+    return -1;
+}
+
+int load_insert_mean(char *bam_file_name, int *insert_mean, int *gc_lseq, int *insert_min_size, int *insert_max_size, long int *mapped_reads)
+{
+    char name[1024];
+    FILE *fp;
+    int rc = 0;
+
+    strcpy(name, bam_file_name);
+    strcat(name, ".mean");
+    fp = fopen(name,"r");
+    if (fp != NULL) {
+	printf("Loading insert_mean et al from %s\n", name);
+	rc = fscanf(fp,"%d %d %d %d %ld", insert_mean, gc_lseq, insert_min_size, insert_max_size, mapped_reads);
+	fclose(fp);
+    }
+    return (rc == 5 ? *insert_mean : -1);
+}
+
+void save_genome_info(char *fasta_file_name)
+{
+    int sgi_a_loop;
+    char name[1000];
+    FILE *fp;
+
+    strcpy(name, fasta_file_name);
+    strcat(name, ".info");
+
+    fp = fopen(name, "w");
+    if (fp != NULL) {
+	fprintf(fp,"%d %ld\n", g_chr_names_index, g_mappable_genome_length);
+	for(sgi_a_loop=0;sgi_a_loop<g_chr_names_index;sgi_a_loop++) {
+	    fprintf(fp,"%d %d %ld %ld %s\n", sgi_a_loop, g_chr_names_len[sgi_a_loop], g_fasta_file_position[sgi_a_loop], g_chr_len[sgi_a_loop], g_chr_names[sgi_a_loop]);
+	}
+	fclose(fp);
+    }
+}
+
+int load_genome_info(char *fasta_file_name, FILE *lgi_fasta_handle)
+{
+    int rc;
+    int lgi_a_loop, index;
+    char name[1000];
+    FILE *fp;
+
+    strcpy(name, fasta_file_name);
+    strcat(name, ".info");
+
+    fp = fopen(name, "r");
+    if (fp != NULL) {
+	rc = fscanf(fp,"%d %ld\n", &g_chr_names_index, &g_mappable_genome_length);
+	if (rc == 2) {
+	    for(lgi_a_loop=0;lgi_a_loop<g_chr_names_index;lgi_a_loop++) {
+		rc = fscanf(fp,"%d %d %ld %ld %s\n", &index, &g_chr_names_len[lgi_a_loop], &g_fasta_file_position[lgi_a_loop], &g_chr_len[lgi_a_loop], g_chr_names[lgi_a_loop] );
+		if (rc != 5 || index != lgi_a_loop) {
+		    g_chr_names_index = 0;
+		    break;
+		}
+	    }
+	}
+	fclose(fp);
+    }
+#ifdef DO_PRINT    
+    if (g_chr_names_index > 0) {
+	printf("g_chr_names_index %d\n", g_chr_names_index);
+	for(lgi_a_loop=0;lgi_a_loop<g_chr_names_index;lgi_a_loop++) {
+	    printf("%d %d %ld %s\n", lgi_a_loop, g_chr_names_len[lgi_a_loop], g_fasta_file_position[lgi_a_loop], g_chr_names[lgi_a_loop]);
+	}
+    }
+#endif    
+    fseek(lgi_fasta_handle, 0, SEEK_SET);
+    return g_chr_names_index;
+}
 
 
 
@@ -475,10 +1132,10 @@ void print_help()
 	printf("\t-o \tSTRUCTURAL VARIANT output file\n");
 	printf("\nOptional Parameters:\n");
 	
-
-
-
-  
+	printf("\t-P \tthreads [1]\n");  
+	
+	
+	
 	printf("\t-M \tturn on GROM's duplicate read filtering\n");  
 	
 	printf("\t-q \tmapping quality threshold [35]\n");
@@ -786,7 +1443,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       printf("cdp_chr_fasta_len is %ld\n", cdp_chr_fasta_len);
     }
     
-    
 #ifdef DO_TIMING
     unsigned long long start_t;  
     unsigned long long end_t;  
@@ -817,7 +1473,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     
     char cdp_ctx_string[4] = "ctx";  
 
-    
     int cdp_snv_cn = 0;  
     int cdp_snv_gt_string_len = 100;
     char cdp_snv_gt_string[cdp_snv_gt_string_len];  
@@ -873,7 +1528,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 
 
     int cdp_begin = 0;
-    
+    char *cdp_target_name;
     char *cdp_test_chr = "chr";
     int cdp_chr_match = -1;
     char cdp_bam_name[g_max_chr_names];  
@@ -1256,18 +1911,11 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     
     
     
-    printf("Finding variants in: %s\n", cdp_chr_name);
-    
-    
     cdp_b = bam_init1();
     
     for(cdp_a_loop=0;cdp_a_loop<cdp_bam_file->header->n_targets;cdp_a_loop++)
     {
-      
-      
-      
-      char *cdp_target_name = cdp_bam_file->header->target_name[cdp_a_loop];  
-      
+      cdp_target_name = cdp_bam_file->header->target_name[cdp_a_loop];
       cdp_bam_name_len = strlen(cdp_target_name);  
       
       for(cdp_int_a=0;cdp_int_a<cdp_bam_name_len;cdp_int_a++)
@@ -1290,7 +1938,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       {
 	printf("cdp_bam_name, cdp_bam_name_len, cdp_chr_name, cdp_chr_name_len %s %d %s %d\n", cdp_bam_name, cdp_bam_name_len, cdp_chr_name, cdp_chr_name_len);  
       }
-      
       if( cdp_bam_name_len == cdp_chr_name_len && strncmp(cdp_bam_name, cdp_chr_name, cdp_chr_name_len) == 0 )  
       {
 	cdp_chr_match = cdp_a_loop;
@@ -1339,14 +1986,12 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     
     
     
-    
 
     
     g_tumor_chr_start = -1;
     g_tumor_chr_end = -1;
     if( g_normal == 1 )
     {
-      
       for(caf_a_loop=0;caf_a_loop<g_tumor_sv_index;caf_a_loop++)
       {
 	caf_target_name = g_tumor_sv_chr_list[caf_a_loop];
@@ -1355,7 +2000,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	{
 	  caf_bam_name[caf_int_a] = tolower(caf_target_name[caf_int_a]);
 	}
-	
 	if( caf_bam_name_len == cdp_chr_name_len && strncmp(caf_bam_name, cdp_chr_name, cdp_chr_name_len) == 0 )  
 	{
 	  if( g_tumor_chr_start == -1 )
@@ -1411,7 +2055,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	
       }
       
-      
 
 
   
@@ -1442,7 +2085,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     {
       printf("cdp_tumor_len %d\n", cdp_tumor_len);
     }
-    printf("cdp_tumor_len %d\n", cdp_tumor_len);  
 
     int *cdp_tumor_type = malloc(cdp_tumor_len * sizeof(int));
     if( cdp_tumor_type == NULL )  
@@ -1804,7 +2446,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       
       
       
-      
 #ifdef DO_PRINT    
       printf("ctx file %s\n", cdp_tumor_sv_file_name_ctx);
 #endif      
@@ -1837,12 +2478,12 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	  {
 	    if( strcmp(cdp_tumor_str, g_sv_types[cdp_a_loop]) == 0 )
 	    {
-	      cdp_tumor_type[cdp_tumor_chr_len] = cdp_a_loop;  
+	      cdp_tumor_type[cdp_tumor_chr_len] = cdp_a_loop;
 	      break;  
 	    }
 	  }
   
-	  cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	  cdp_tumor_str = strtok(NULL, g_tumor_separator);
   
 	  if( strcmp(cdp_tumor_str, cdp_chr_name) == 0 )
   
@@ -1850,7 +2491,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
   
 	    if( cdp_tumor_type[cdp_tumor_chr_len] == 6 || cdp_tumor_type[cdp_tumor_chr_len] == 7 )  
 	    {
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_start2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
@@ -1859,7 +2500,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
   
 	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
 	      cdp_tumor_end_binom_cdf[cdp_tumor_chr_len] = cdp_tumor_start_binom_cdf[cdp_tumor_chr_len];
 	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
@@ -1868,13 +2509,13 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
 	      cdp_tumor_end_rd[cdp_tumor_chr_len] = cdp_tumor_start_rd[cdp_tumor_chr_len];  
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_conc[cdp_tumor_chr_len] = cdp_tumor_start_conc[cdp_tumor_chr_len];
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_other_len[cdp_tumor_chr_len] = cdp_tumor_start_other_len[cdp_tumor_chr_len];
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_mchr[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
   
   
@@ -1885,12 +2526,12 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
   
   
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_mpos[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_read_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_read_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_read_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_read_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      
@@ -1928,65 +2569,63 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	    
 	    else if( cdp_tumor_type[cdp_tumor_chr_len] == SNV )
 	    {
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_start2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
 	      cdp_tumor_end[cdp_tumor_chr_len] = cdp_tumor_start[cdp_tumor_chr_len];
 	      cdp_tumor_end2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_snv_base[cdp_tumor_chr_len] = cdp_tumor_str[0];
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_snv_ratio[cdp_tumor_chr_len] = atof(cdp_tumor_str);  
 	      
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
 	      
 	      for(cdp_a_loop=0;cdp_a_loop<g_nucleotides;cdp_a_loop++)
 	      {
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);
 		cdp_tumor_snv[cdp_a_loop][cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
 	      }
 	      
 	      for(cdp_a_loop=0;cdp_a_loop<g_nucleotides;cdp_a_loop++)
 	      {
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);
 		cdp_tumor_snv_lowmq[cdp_a_loop][cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
 	      }
 	      
 	      
 	      
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_snv_bq[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_snv_bq_all[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_snv_mq[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_snv_mq_all[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_snv_bq_read_count[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_snv_mq_read_count[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_snv_read_count_all[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      
 
 	      
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_snv_pos_in_read[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_snv_fstrand[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      
 	      
 	      
 	      
 	      
-
-
 	      
 	      
 
@@ -2009,40 +2648,40 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	    
 	    else if( cdp_tumor_type[cdp_tumor_chr_len] == INDEL_DEL )
 	    {
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_start2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end2[cdp_tumor_chr_len][0] = cdp_tumor_end[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_dist[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_indel[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_indel[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_sc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_sc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      
 	      
@@ -2072,36 +2711,36 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	    }
 	    else if( cdp_tumor_type[cdp_tumor_chr_len] == INDEL_INS )
 	    {
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_start2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end2[cdp_tumor_chr_len][0] = cdp_tumor_end[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_dist[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_indel[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_indel[cdp_tumor_chr_len] = cdp_tumor_start_indel[cdp_tumor_chr_len];
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_rd[cdp_tumor_chr_len] = cdp_tumor_start_rd[cdp_tumor_chr_len];
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_sc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end_sc[cdp_tumor_chr_len] = cdp_tumor_start_sc[cdp_tumor_chr_len];
 	      
@@ -2134,22 +2773,22 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	    else if( cdp_tumor_type[cdp_tumor_chr_len] < 11 )  
 	    
 	    {
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_start2[cdp_tumor_chr_len][0] = cdp_tumor_start[cdp_tumor_chr_len];  
   
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      cdp_tumor_end2[cdp_tumor_chr_len][0] = cdp_tumor_end[cdp_tumor_chr_len];  
   
-	      if( cdp_tumor_type[cdp_tumor_chr_len] != 2 )  
+	      if( cdp_tumor_type[cdp_tumor_chr_len] != 2 )
 	      {
 		cdp_tumor_str = strtok(NULL, g_tumor_separator);
-		cdp_tumor_dist[cdp_tumor_chr_len] = atof(cdp_tumor_str);  
+		cdp_tumor_dist[cdp_tumor_chr_len] = atof(cdp_tumor_str);
 	      }
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_binom_cdf[cdp_tumor_chr_len] = atof(cdp_tumor_str);
 	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_start_sv_evidence[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
@@ -2159,23 +2798,23 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      cdp_tumor_start_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
 	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
 	      cdp_tumor_end_rd[cdp_tumor_chr_len] = atoi(cdp_tumor_str);  
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_conc[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_start_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-	      cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+	      cdp_tumor_str = strtok(NULL, g_tumor_separator);
 	      cdp_tumor_end_other_len[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      if( cdp_tumor_type[cdp_tumor_chr_len] == 0 || cdp_tumor_type[cdp_tumor_chr_len] == 1 || cdp_tumor_type[cdp_tumor_chr_len] == 8 || cdp_tumor_type[cdp_tumor_chr_len] == 9 )
 	      {
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);
 		cdp_tumor_start_read_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);
 		cdp_tumor_start_read_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);
 		cdp_tumor_end_read_start[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
-		cdp_tumor_str = strtok(NULL, g_tumor_separator);  
+		cdp_tumor_str = strtok(NULL, g_tumor_separator);
 		cdp_tumor_end_read_end[cdp_tumor_chr_len] = atoi(cdp_tumor_str);
 	      }
 	      
@@ -2232,7 +2871,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
   
 	    
 	    
-	    
 	    cdp_tumor_chr_len += 1;
 	  }
 	
@@ -2243,7 +2881,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       
       
 
-      printf("cdp_tumor_chr_len %d\n", cdp_tumor_chr_len);  
 
       if( cdp_tumor_chr_len > 0 )
       {
@@ -5090,8 +5727,8 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 
     
     
-    
- 
+    if (cdp_pos_in_contig_start < g_sub_region_start - g_sub_region_overlap)
+	cdp_pos_in_contig_start = g_sub_region_start - g_sub_region_overlap;
     
 
 
@@ -5100,9 +5737,8 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     
     if( cdp_chr_match >= 0 )
     {
-      char *cdp_target_name = cdp_bam_file->header->target_name[cdp_chr_match];  
+      while(my_samread(cdp_bam_file, cdp_b) > 0 && cdp_begin < 2 )  
       
-      while(samread(cdp_bam_file, cdp_b) > 0 && cdp_begin < 2 )
       {
 	cdp_pos = cdp_b->core.pos;
 	cdp_flag = cdp_b->core.flag;
@@ -5112,10 +5748,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	cdp_mpos = cdp_b->core.mpos;
 	cdp_tlen = cdp_b->core.isize;
 	cdp_lseq = cdp_b->core.l_qseq;
-	
-	
-	
-
 	
 	
 	
@@ -5771,20 +6403,14 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	    
 
 
-	    
 	    if( cdp_begin < 2 && cdp_pos >= cdp_one_base_index_start ) 
 	    {
-	      
 	      if( cdp_pos - g_overlap_mult*g_insert_max_size <= cdp_pos_in_contig_start ) 
 
 	      {
-		
 		while( cdp_pos - g_overlap_mult*g_insert_max_size <= cdp_pos_in_contig_start && cdp_begin < 2 ) 
 
 		{
-		  
-		  
-		  
 		  
 
 
@@ -6045,11 +6671,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		    }  
 		    
 		    
-
 		    
-		    
-		    
-
 		    if( cdp_add_to_list == 1 )  
 		    {
 #ifdef DO_TIMING
@@ -6153,6 +6775,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 #ifdef DO_TIMING
 			  
 #endif			  
+
 			  if( cdp_pos >= 0 && cdp_pos < cdp_chr_fasta_len )  
 			  {
 			    
@@ -6169,6 +6792,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 			    {
 			      cdp_72_loop_end = cdp_c_len[cdp_a_loop];
 			    }
+			    
 			    
 			    for(cdp_b_loop=cdp_72_loop_start;cdp_b_loop<cdp_72_loop_end;cdp_b_loop++)  
 			    
@@ -6799,11 +7423,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		      }
 		      
 		      
-
 		      
-		      
-		      
-
 		      
 		      
 		      
@@ -7329,11 +7949,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		      
 		      
 		      
-
 		      
-		      
-		      
-
 		      
 		      int cdp_insert_temp = 0;
 		      if( g_insert_mean - 2*cdp_lseq > 0 )
@@ -8779,9 +9395,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 				    }
 				  }
 				}
-				
-				
-				
 				
 	  
 
@@ -10352,8 +10965,8 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		    }  
 
 		  }
+		  if( my_samread(cdp_bam_file, cdp_b) > 0 )
 		  
-		  if( samread(cdp_bam_file, cdp_b) > 0 )
 		  {
 		    cdp_pos = cdp_b->core.pos;
 		    cdp_flag = cdp_b->core.flag;
@@ -10470,7 +11083,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		  }
 		}
 	      }
-	      
 	      if( cdp_pos_in_contig_start > 2*g_insert_max_size && g_tumor_sv == 0 )  
 
 	      {
@@ -12301,7 +12913,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 			}
 			
 			
-			cdp_inv_f_list_index += 1;
+			cdp_inv_f_list_index += 1;		      
 		      }  
 		      
 		      else
@@ -12941,7 +13553,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      
 	      if( g_tumor_sv == 1 )
 	      {
-		
 
 		double cdp_tumor_prob;
 		while( cdp_tumor_start2_index < cdp_tumor_chr_len && cdp_tumor_start2[cdp_tumor_start2_index][0] < cdp_pos_in_contig_start )  
@@ -12961,7 +13572,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 
 		{
 		  cdp_tumor_loop = cdp_tumor_start2[cdp_tumor_start2_index][1];  
-		  
 		  if( cdp_tumor_start2[cdp_tumor_start2_index][0] == cdp_pos_in_contig_start )  
 
 		  {
@@ -13106,16 +13716,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 			  }
 			}
 		      }
-		      
-		      
-		      
-		      
-
-
-
-
-
-
 		      
 
 
@@ -14258,8 +14858,8 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	    }
 	    else
 	    {
+	      if( my_samread(cdp_bam_file, cdp_b) > 0 )  
 	      
-	      if( samread(cdp_bam_file, cdp_b) > 0 )
 	      {
 		cdp_pos = cdp_b->core.pos;
 		cdp_flag = cdp_b->core.flag;
@@ -15556,6 +16156,10 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       }
       for(cdp_a_loop=0;cdp_a_loop<cdp_ctx_f_list2_index;cdp_a_loop++)
       {
+	if( cdp_ctx_f_list2[cdp_a_loop] == 99030425 )  
+	{
+	  printf("CTX_F\t%s\t%d\t%e\t%.1f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%e\n", cdp_chr_name, cdp_ctx_f_list2[cdp_a_loop], cdp_ctx_f_list2_binom_cdf[cdp_a_loop], (double)cdp_ctx_f_list2_ctx_f[cdp_a_loop]/(double)cdp_add_factor, cdp_ctx_f_list2_rd[cdp_a_loop], cdp_ctx_f_list2_conc[cdp_a_loop], cdp_ctx_f_list2_other_len[cdp_a_loop], cdp_ctx_f_list2_mchr[cdp_a_loop], cdp_ctx_f_list2_mpos[cdp_a_loop], cdp_ctx_f_list2_read_start[cdp_a_loop], cdp_ctx_f_list2_read_end[cdp_a_loop], cdp_ctx_f_list2_hez_binom_cdf[cdp_a_loop]);  
+	}
 	if( (cdp_ctx_f_list2_binom_cdf[cdp_a_loop] <= g_pval_threshold || cdp_ctx_f_list2_hez_binom_cdf[cdp_a_loop] <= g_pval_threshold) && (double) cdp_ctx_f_list2_ctx_f[cdp_a_loop] / (double) cdp_ctx_f_list2_rd[cdp_a_loop] >= g_min_sv_ratio*(double)cdp_add_factor )  
 	
 	
@@ -15628,6 +16232,10 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       }
       for(cdp_a_loop=0;cdp_a_loop<cdp_ctx_r_list2_index;cdp_a_loop++)
       {
+	if( cdp_ctx_f_list2[cdp_a_loop] == 99030425 )  
+	{
+	  printf("CTX_R\t%s\t%d\t%e\t%.1f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%e\n", cdp_chr_name, cdp_ctx_r_list2[cdp_a_loop], cdp_ctx_r_list2_binom_cdf[cdp_a_loop], (double)cdp_ctx_r_list2_ctx_r[cdp_a_loop]/(double)cdp_add_factor, cdp_ctx_r_list2_rd[cdp_a_loop], cdp_ctx_r_list2_conc[cdp_a_loop], cdp_ctx_r_list2_other_len[cdp_a_loop], cdp_ctx_r_list2_mchr[cdp_a_loop], cdp_ctx_r_list2_mpos[cdp_a_loop], cdp_ctx_r_list2_read_start[cdp_a_loop], cdp_ctx_r_list2_read_end[cdp_a_loop], cdp_ctx_r_list2_hez_binom_cdf[cdp_a_loop]);  
+	}
 	if( (cdp_ctx_r_list2_binom_cdf[cdp_a_loop] <= g_pval_threshold || cdp_ctx_r_list2_hez_binom_cdf[cdp_a_loop] <= g_pval_threshold) && (double) cdp_ctx_r_list2_ctx_r[cdp_a_loop] / (double) cdp_ctx_r_list2_rd[cdp_a_loop] >= g_min_sv_ratio*(double)cdp_add_factor )  
 	
 	
@@ -15970,9 +16578,8 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       
 #endif      
     }
-    
-    bam_destroy1(cdp_b);  
 
+    bam_destroy1(cdp_b);  
 
     if( g_internal == 1 )  
     {
@@ -15996,7 +16603,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       
       printf("before free SV lists\n");
     }
-    
+
     
     if( g_sv_list_len_over == 1 )
     {
@@ -16010,26 +16617,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     }
     
 
-    
-    printf("cdp_snv_list_index %d\n", cdp_snv_list_index);
-    printf("cdp_ins_list_index %d\n", cdp_ins_list_index);
-    printf("cdp_indel_i_list_index %d\n", cdp_indel_i_list_index);
-    printf("cdp_indel_d_list_index %d\n", cdp_indel_d_list_index);
-    printf("cdp_dup_list_index %d\n", cdp_dup_list_index);
-    printf("cdp_del_list_index %d\n", cdp_del_list_index);
-    
-    printf("cdp_inv_f_list_index %d\n", cdp_inv_f_list_index);  
-    printf("cdp_inv_r_list_index %d\n", cdp_inv_r_list_index);  
-
-    printf("cdp_ins_list2_index %d\n", cdp_ins_list2_index);
-    printf("cdp_dup_list2_index %d\n", cdp_dup_list2_index);
-    printf("cdp_del_list2_index %d\n", cdp_del_list2_index);
-    
-    printf("cdp_inv_f_list2_index %d\n", cdp_inv_f_list2_index);  
-    printf("cdp_inv_r_list2_index %d\n", cdp_inv_r_list2_index);  
-    
-
-    printf("before free SV lists\n");  
 
     
     
@@ -16127,9 +16714,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      caf_repeat_rd_list[caf_a_loop] = (double) caf_repeat_rd / (caf_repeat_end_list[caf_a_loop] - caf_repeat_start_list[caf_a_loop]);
 	      if( caf_repeat_rd_list[caf_a_loop] < 2 * caf_repeat_chr_rd_ave )
 	      {
-		
-		
-		
 		      caf_repeat_rd_average[caf_repeat_type_list[caf_a_loop]] += caf_repeat_rd_list[caf_a_loop];
 	      }
 	      else
@@ -16138,7 +16722,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      }
 	      caf_repeat_rd_type_count[caf_repeat_type_list[caf_a_loop]] += 1;
       }
-      free(caf_repeat_rd_list);
+      
 
       for(caf_a_loop=0;caf_a_loop<caf_repeat_types;caf_a_loop++)
       {
@@ -16157,6 +16741,7 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		      caf_repeat_rd_stdev[caf_repeat_type_list[caf_a_loop]] += ((2 * caf_repeat_chr_rd_ave) - caf_repeat_rd_average[caf_repeat_type_list[caf_a_loop]]) * ((2 * caf_repeat_chr_rd_ave) - caf_repeat_rd_average[caf_repeat_type_list[caf_a_loop]]);
 	      }
       }
+      free(caf_repeat_rd_list);  
 
       for(caf_a_loop=0;caf_a_loop<caf_repeat_types;caf_a_loop++)
       {
@@ -16938,7 +17523,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 			}
 		      }
 		      
-		      printf("before free del rd\n");  
 
 		      free(caf_del_list_start);
 		      free(caf_del_list_end);
@@ -16948,8 +17532,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 		      free(caf_del_list_cn);
 		      free(caf_del_list_cn_stdev);
 
-		      printf("before free dup rd\n");  
-		      
 		      free(caf_dup_list_start);
 		      free(caf_dup_list_end);
 		      free(caf_dup_list_ref);
@@ -16960,7 +17542,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 	      }
       }
       
-      printf("before free block\n");  
       
       
       free(caf_block_rd_list);
@@ -16969,7 +17550,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       
     }  
 
-    printf("before free rmdup\n");  
     
     free(cdp_rmdup_svtype_list);
     free(cdp_rmdup_tlen_list);
@@ -16978,7 +17558,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_rmdup_mchr_list);
     
 
-    printf("before free ctx\n");  
     
     free(cdp_ctx_r_list2_read_end);
     free(cdp_ctx_r_list2_read_start);
@@ -17004,7 +17583,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_ctx_f_list2_ctx_f);
     free(cdp_ctx_f_list2);
 
-    printf("before free inv\n");  
     
     free(cdp_inv_r_list2_end_read_end);
     free(cdp_inv_r_list2_end_read_start);
@@ -17051,7 +17629,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 
 
 
-    printf("before free del\n");  
     free(cdp_del_list2_end_read_end);
     free(cdp_del_list2_end_read_start);
     free(cdp_del_list2_start_read_end);
@@ -17072,7 +17649,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_del_list2_start_del_f);
     free(cdp_del_list2_start);
     
-    printf("before free dup\n");  
     free(cdp_dup_list2_end_read_end);
     free(cdp_dup_list2_end_read_start);
     free(cdp_dup_list2_start_read_end);
@@ -17093,7 +17669,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_dup_list2_start_dup_r);
     free(cdp_dup_list2_start);
     
-    printf("before free ins\n");  
     free(cdp_ins_list2_end_other_len);
     free(cdp_ins_list2_start_other_len);
     free(cdp_ins_list2_end_binom_cdf);
@@ -17107,7 +17682,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_ins_list2_start_ins);  
     free(cdp_ins_list2_start);
     
-    printf("before free ctx1\n");  
     free(cdp_ctx_r_list_read_end);
     free(cdp_ctx_r_list_read_start);
     free(cdp_ctx_r_list_other_len);
@@ -17132,7 +17706,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_ctx_f_list_ctx_f);
     free(cdp_ctx_f_list);
 
-    printf("before free indel1\n");  
     free(cdp_indel_d_list_end_sc);
     free(cdp_indel_d_list_start_sc);
     free(cdp_indel_d_list_end_rd);
@@ -17171,7 +17744,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_indel_i_list_seq);
     
     
-    printf("before free inv1\n");  
     
     free(cdp_inv_r_list_end_read_end);
     free(cdp_inv_r_list_end_read_start);
@@ -17180,7 +17752,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_inv_r_list_end_other_len);
     free(cdp_inv_r_list_start_other_len);
     free(cdp_inv_r_list_dist);
-    printf("before free inv1_hez\n");  
     free(cdp_inv_r_list_end_hez_binom_cdf);  
     free(cdp_inv_r_list_end_binom_cdf);
     free(cdp_inv_r_list_end_conc);
@@ -17194,7 +17765,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_inv_r_list_start_inv);
     free(cdp_inv_r_list_start);
     
-    printf("before free invf1\n");  
     free(cdp_inv_f_list_end_read_end);
     free(cdp_inv_f_list_end_read_start);
     free(cdp_inv_f_list_start_read_end);
@@ -17202,29 +17772,17 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_inv_f_list_end_other_len);
     free(cdp_inv_f_list_start_other_len);
     free(cdp_inv_f_list_dist);
-    printf("before free invf1_hez\n");  
     free(cdp_inv_f_list_end_hez_binom_cdf);  
-    printf("before free invf1_hez2\n");  
     free(cdp_inv_f_list_end_binom_cdf);
-    printf("before free invf1_hez3\n");  
     free(cdp_inv_f_list_end_conc);
-    printf("before free invf1_hez4\n");  
     free(cdp_inv_f_list_end_rd);  
-    printf("before free invf1_hez5\n");  
     free(cdp_inv_f_list_end_inv);
-    printf("before free invf1_hez6\n");  
     free(cdp_inv_f_list_end);
-    printf("before free invf1_hez7\n");  
     free(cdp_inv_f_list_start_hez_binom_cdf);  
-    printf("before free invf1_hez8\n");  
     free(cdp_inv_f_list_start_binom_cdf);
-    printf("before free invf1_hez9\n");  
     free(cdp_inv_f_list_start_conc);
-    printf("before free invf1_hez10\n");  
     free(cdp_inv_f_list_start_rd);  
-    printf("before free invf1_hez11\n");  
     free(cdp_inv_f_list_start_inv);
-    printf("before free invf1_hez12\n");  
     free(cdp_inv_f_list_start);
     
     
@@ -17232,7 +17790,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
 
 
     
-    printf("before free del1\n");  
     free(cdp_del_list_end_read_end);
     free(cdp_del_list_end_read_start);
     free(cdp_del_list_start_read_end);
@@ -17253,7 +17810,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_del_list_start_del_f);
     free(cdp_del_list_start);
     
-    printf("before free dup1\n");  
     free(cdp_dup_list_end_read_end);
     free(cdp_dup_list_end_read_start);
     free(cdp_dup_list_start_read_end);
@@ -17274,7 +17830,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_dup_list_start_dup_r);
     free(cdp_dup_list_start);
     
-    printf("before free ins1\n");  
     free(cdp_ins_list_end_other_len);
     free(cdp_ins_list_start_other_len);
     free(cdp_ins_list_end_binom_cdf);
@@ -17288,7 +17843,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_ins_list_start_ins);  
     free(cdp_ins_list_start);
     
-    printf("before free snv\n");  
     
     
     free(cdp_snv_start_hez_binom_cdf_list);
@@ -17392,7 +17946,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       printf("after free SNV counters\n");
     }
     
-    printf("before free other\n");  
     
     for(cdp_other_loop=0;cdp_other_loop<g_other_len;cdp_other_loop++)
     {
@@ -17432,7 +17985,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     
 
 
-    printf("before free onebase1\n");  
     
     free(cdp_one_base_read_count_all);
     free(cdp_one_base_mq_read_count);
@@ -17455,7 +18007,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_one_base_ctx_sc_right);
     free(cdp_one_base_ctx_sc_left);
     
-    printf("before free onebase2\n");  
     free(cdp_one_base_indel_d_r_rd);  
     free(cdp_one_base_indel_d_rdist);
     free(cdp_one_base_indel_d_r);
@@ -17487,7 +18038,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     
     
     
-    printf("before free onebase3\n");  
     free(cdp_one_base_inv_r2_read_end);
     free(cdp_one_base_inv_f2_read_end);
     free(cdp_one_base_inv_r2_read_start);
@@ -17528,7 +18078,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_one_base_del_r);
     free(cdp_one_base_del_f);
     
-    printf("before free onebase4\n");  
     free(cdp_one_base_ins);
     free(cdp_one_base_sc_rd);
     free(cdp_one_base_sc_right_rd);
@@ -17543,7 +18092,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     
     
 
-    printf("before free rd\n");  
     
     free(caf_repeat_type_list);  
     free(caf_repeat_start_list);  
@@ -17564,7 +18112,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
       printf("before free tumor SV predictions\n");
     }
 
-    printf("before free tumor\n");  
     
     
     free(cdp_tumor_snv_start_hez_binom_cdf); 
@@ -17654,7 +18201,6 @@ void count_discordant_pairs(samfile_t *cdp_bam_file, char *cdp_bam_file_name, ch
     free(cdp_tumor_type);
     
 
-    printf("after free tumor\n");  
     if( g_internal == 1 )  
     {
       printf("after free tumor SV predictions\n");
@@ -19904,7 +20450,7 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
   }
   char fds_fasta_line[1000];
   long fds_a_loop, fds_b_loop;
-  
+  long fds_c_loop, fds_bam_a;  
   long fds_chr_fasta_len = 0;
   
   int fds_fasta_line_len = 0;
@@ -19912,7 +20458,7 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
   int fds_fasta_while;
   
   
-  
+  char *fds_target_name;
   char *fds_test_chr = "chr";
   int fds_chr_match = -1;
   char fds_bam_name[g_max_chr_names];  
@@ -19920,8 +20466,8 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
   int fds_int_a;  
   long fds_num_chr;
   
-  
-  
+  char partial_results_file_name[1024];  
+  int loop_start, loop_limit;  
   
 
   
@@ -19937,9 +20483,9 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
   FILE *fds_results_file = NULL;  
   FILE *fds_results_file_ctx = NULL;  
   char fds_results_file_name_ctx[1024];  
-  
+  char partial_results_file_name_ctx[1024];  
   char fds_ctx_string[4] = "ctx";  
-  
+  if (g_one_chromosome < 0) {  
       fds_results_file = fopen(fds_results_file_name, "w");  
       
       if( strlen(fds_results_file_name) > 4 && fds_results_file_name[strlen(fds_results_file_name)-4] == '.' && fds_results_file_name[strlen(fds_results_file_name)-3] == 'v' && fds_results_file_name[strlen(fds_results_file_name)-2] == 'c' && fds_results_file_name[strlen(fds_results_file_name)-1] == 'f' )
@@ -20126,12 +20672,26 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
       }  
 
     }
+  }  
   
-  
-  
-
-
-  
+  else {
+      sprintf(partial_results_file_name, "%s.%s-%d", fds_results_file_name, fds_bam_file->header->target_name[g_one_chromosome], g_sub_child_number);
+      fds_results_file = fopen(partial_results_file_name, "w");
+      if (fds_results_file == NULL)
+      {
+	printf("Error opening file %s\n", partial_results_file_name);
+	exit(1);
+      }
+      
+      sprintf(partial_results_file_name_ctx, "%s.%s-%d.%s", fds_results_file_name, fds_bam_file->header->target_name[g_one_chromosome], g_sub_child_number, fds_ctx_string);
+      fds_results_file_ctx = fopen(partial_results_file_name_ctx, "w");
+      if (fds_results_file_ctx == NULL)
+      {
+	printf("Error opening file %s\n", partial_results_file_name_ctx);
+	exit(1);
+      }
+      
+  }
   
   
  
@@ -20253,45 +20813,103 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
   
   fds_num_chr = fds_bam_file->header->n_targets;
   
+  loop_start = 0;
+  loop_limit = fds_num_chr;
+  if (g_parallel_mode > 1) {
+      allcate_children(fds_num_chr);
+  }
+  else if (g_one_chromosome >= 0) {
+      loop_start = g_one_chromosome;
+      loop_limit = g_one_chromosome+1;
+  }
   
+  for(fds_a_loop=loop_start;fds_a_loop<loop_limit;fds_a_loop++)  
   
-  
-  
-  for(fds_a_loop=0;fds_a_loop<fds_num_chr;fds_a_loop++)  
   {
     
+    fds_bam_a = fds_a_loop;
+    if( g_parallel_mode != 0 )  
     
+    {
+      fds_chr_match = -1;
+      for( fds_c_loop=0;fds_c_loop<fds_num_chr;fds_c_loop++)
+      {
+	fds_target_name = fds_bam_file->header->target_name[fds_c_loop];
+	fds_bam_name_len = strlen(fds_target_name);  
+	
+	
+	for(fds_int_a=0;fds_int_a<fds_bam_name_len;fds_int_a++)
+	{
+	  fds_bam_name[fds_int_a] = tolower(fds_target_name[fds_int_a]);
+	}
+	
+	
+	fds_int_a = fds_bam_name_len - 1;
+	while( fds_int_a > 0 )
+	{
+	  if( isgraph(fds_bam_name[fds_int_a]) == 0 )
+	  {
+	    fds_bam_name_len = fds_int_a;
+	  }
+	  fds_int_a -= 1;
+	}
+	
+      
+	for(fds_b_loop=g_parallel_fasta_chr_index[fds_a_loop];fds_b_loop<g_parallel_fasta_chr_index[fds_a_loop]+1;fds_b_loop++)
+	{
+	  if( fds_bam_name_len == g_chr_names_len[fds_b_loop] && strncmp(fds_bam_name, g_chr_names[fds_b_loop], g_chr_names_len[fds_b_loop]) == 0 )  
+	  {
+	    fds_chr_match = fds_b_loop;
+	    
+	    break;
+	  }
+	  else if( (fds_bam_name_len-g_chr_name_start+1) == g_chr_names_len[fds_b_loop] && strncmp(fds_bam_name, fds_test_chr, (g_chr_name_start-1)) == 0 )  
+	  {
+	    
+	    char *fds_temp_string = malloc(strlen(fds_test_chr)+strlen(g_chr_names[fds_b_loop])+1);
+	    strcpy(fds_temp_string, fds_test_chr);
+	    strcat(fds_temp_string, g_chr_names[fds_b_loop]);
+	    if( strncmp(fds_bam_name, fds_temp_string, fds_bam_name_len) == 0 )  
+	    {
+	      
+	      fds_chr_match = fds_b_loop;
+	      
+	      break;
+	    }
+	    free(fds_temp_string);
+	  }
+	  
+	  else if( (fds_bam_name_len+g_chr_name_start-1) == g_chr_names_len[fds_b_loop] && strncmp(g_chr_names[fds_b_loop], fds_test_chr, (g_chr_name_start-1)) == 0 )  
+	  {
+	    
+	    char *fds_temp_string = malloc(strlen(fds_test_chr)+strlen(fds_bam_name)+1);
+	    strcpy(fds_temp_string, fds_test_chr);
+	    strcat(fds_temp_string, fds_bam_name);  
+	    if( strncmp(g_chr_names[fds_b_loop], fds_temp_string, g_chr_names_len[fds_b_loop]) == 0 )
+	    {
+	      
+	      fds_chr_match = fds_b_loop;
+	      
+	      break;
+	    }
+	    free(fds_temp_string);
+	  }
+	  
+	
+	}
+	if( fds_chr_match != -1 )
+	{
+	  fds_bam_a = fds_c_loop;
+	  break;
+	}
+      }
+    }
     
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
- 
-    
-    
-    
+    else  
+    {  
       
       fds_chr_match = -1;
-      char *fds_target_name = fds_bam_file->header->target_name[fds_a_loop];  
-      
+      fds_target_name = fds_bam_file->header->target_name[fds_a_loop];
       fds_bam_name_len = strlen(fds_target_name);  
       
       
@@ -20354,7 +20972,7 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
 	
 	
       }
-    
+    }  
     
     
     
@@ -20377,10 +20995,11 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
     
     {
       
-      
-
-
-  
+      if (g_parallel_mode > 1) {
+	  launch_one_chromosome(fds_bam_a, fds_bam_name, g_fasta_file_position[g_parallel_fasta_chr_index[fds_a_loop]+1] - g_fasta_file_position[g_parallel_fasta_chr_index[fds_a_loop]]);  
+	  
+      }
+      else {
       
 	if( g_internal == 1 )  
 	{
@@ -20425,24 +21044,37 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
 	  
 	}
 	
-	
-
-
-
-
-
-  
-	
+#ifdef DO_TIMING
+	timers[10+ccount*2] = gettime();
+#endif	
 	if( fds_chr_fasta_len > fds_one_base_index_start + g_overlap_mult*g_insert_max_size )  
 	{
-	  count_discordant_pairs(fds_bam_file, fds_bam_file_name, &temp_chr_fasta[0], fds_chr_fasta_len, g_chr_names[fds_chr_match], g_chr_names_len[fds_chr_match], fds_results_file, fds_tumor_sv_file_name, fds_tumor_len, fds_results_file_ctx, fdd_sample_high_mq_rd_list, fdd_sample_low_mq_rd_list, fdd_sample_repeat_rd_list, &fdd_low_mq_index[0], &fdd_high_mq_index[0], &fdd_low_mq_index_all[0], &fdd_high_mq_index_all[0], fdd_pval2sd_pval_list, fdd_pval2sd_sd_list, fdd_pval2sd_list_len, fds_results_file_name);  
-	}
+	  my_before_reading(&g_single);
+    #pragma omp parallel
+	  {
+	      int t = omp_get_thread_num();
+	      if (t == 0) {
+		  count_discordant_pairs(fds_bam_file, fds_bam_file_name, &temp_chr_fasta[0], fds_chr_fasta_len, g_chr_names[fds_chr_match], g_chr_names_len[fds_chr_match], fds_results_file, fds_tumor_sv_file_name, fds_tumor_len, fds_results_file_ctx, fdd_sample_high_mq_rd_list, fdd_sample_low_mq_rd_list, fdd_sample_repeat_rd_list, &fdd_low_mq_index[0], &fdd_high_mq_index[0], &fdd_low_mq_index_all[0], &fdd_high_mq_index_all[0], fdd_pval2sd_pval_list, fdd_pval2sd_sd_list, fdd_pval2sd_list_len, fds_results_file_name);  
+		  
+		  
+		  my_stop_reading(&g_single);
+	      }
+	      if (t == 1)
+		  single_chromosome_read(&g_single, fds_a_loop);  
+		  
+	  }
+	}  
+#ifdef DO_TIMING
+	timers[11+ccount*2] = gettime();
+#endif	
+	ccount++;
+	
 	
 	if( g_internal == 1 )  
 	{
 	  printf("after calc_ave_for_gc\n");
 	}
-      
+      }
       
     }
     else if( g_internal == 1 )  
@@ -20486,8 +21118,12 @@ void find_disc_svs(char *fds_bam_file_name, FILE *fds_fasta_handle, char *fds_re
   
   
   
-  
- 
+  if (g_parallel_mode > 1) {
+      for (fds_a_loop = 0; fds_a_loop < fds_num_chr; fds_a_loop++) {
+	  add_one_chromosome_result(fds_a_loop, fds_bam_file->header->target_name[fds_a_loop], 
+				    fds_results_file_name, g_fasta_file_position[fds_a_loop+1] - g_fasta_file_position[fds_a_loop]);
+      }
+  }
   
   return;
 }
@@ -21238,8 +21874,8 @@ int main(int argc, char *argv[])
 #endif
 	long m_a_loop; 
 	int m_b_loop, m_c_loop; 
-	
-	
+	int m_temp_chr, m_max_chr;  
+	long m_max_chr_len;  
 	
 	char exec_path[1024];
 	
@@ -21264,10 +21900,12 @@ int main(int argc, char *argv[])
 	
 
 	
-	 
+	setlinebuf(stdout);
+	g_save_argc = argc;
+	g_save_argv = argv;
 	
 	int opt = 0;
-	while ((opt = getopt (argc, argv, "Z:W:X:Q:A:Y:B:D:E:K:N:V:U:L:F:SMG:i:r:o:p:q:s:t:v:g:l:d:b:n:a:y:z:e:fj:k:m:u:w:x:h")) != -1)  
+	while ((opt = getopt (argc, argv, "Z:W:X:Q:A:Y:B:D:E:K:N:V:U:L:F:SP:c:R:MG:i:r:o:p:q:s:v:g:l:d:b:n:a:y:z:e:fj:k:m:u:w:x:h")) != -1)  
 	
 	
 	
@@ -21282,7 +21920,17 @@ int main(int argc, char *argv[])
 				break;
 			
 			
-			  
+			case 'P':
+				g_parallel_mode = atoi(optarg);
+				if (g_parallel_mode < 0 || g_parallel_mode > CHROMOSOMES_IN_PARALLEL)
+				    g_parallel_mode = 0;
+				break;
+			case 'c':
+				sscanf(optarg, "%d,%d,%d,%d", &g_one_chromosome, &g_sub_child_number, &g_sub_region_start, &g_sub_region_end);
+				break;
+			case 'R':
+				g_sub_region_size = atoi(optarg) * 1000000;
+				break;
 			
 			
 			case 'G':
@@ -21362,10 +22010,7 @@ int main(int argc, char *argv[])
 				break;
 			
 			
-			case 't':
-				tumor_sv_file_name = optarg;
-				break;
-			
+  
 			
 			case 'v':
 				g_pval_threshold = atof(optarg);
@@ -21436,7 +22081,8 @@ int main(int argc, char *argv[])
 
 
 			case '?':
-				if ( optopt == 'i' || optopt == 'r' || optopt == 'o' || optopt == 'p' || optopt == 'q' || optopt == 's' || optopt == 't' || optopt == 'v' || optopt == 'g' || optopt == 'l' || optopt == 'd' || optopt == 'b' || optopt == 'n' || optopt == 'a' || optopt == 'y' || optopt == 'z' || optopt == 'e' || optopt == 'j' || optopt == 'k' || optopt == 'm' || optopt == 'u' || optopt == 'w' || optopt == 'x' )  
+				if (  optopt == 'G' ||optopt == 'P' || optopt == 'R' || optopt == 'i' || optopt == 'r' || optopt == 'o' || optopt == 'p' || optopt == 'q' || optopt == 's' || optopt == 'v' || optopt == 'g' || optopt == 'l' || optopt == 'd' || optopt == 'b' || optopt == 'n' || optopt == 'a' || optopt == 'c' || optopt == 'y' || optopt == 'z' || optopt == 'e' || optopt == 'j' || optopt == 'k' || optopt == 'm' || optopt == 'u' || optopt == 'w' || optopt == 'x' )  
+				
 				
 				
 				
@@ -21455,7 +22101,9 @@ int main(int argc, char *argv[])
 	g_pval_threshold1 = g_pval_threshold;  
 	g_rd_min_mapq = g_min_mapq;  
 	
-	
+	if (g_one_chromosome >= 0)
+	    g_parallel_mode = 1;
+	omp_set_num_threads(g_parallel_mode ? 2 : 1);
 	
 
 	printf("bam %s\n", bam_file_name);
@@ -21502,7 +22150,7 @@ int main(int argc, char *argv[])
 
 
 	
-	
+	if (g_one_chromosome < 0) {  
 	  if( results_file_name != NULL )
 	  {
 		  fasta_handle = fopen(results_file_name, "w");
@@ -21522,7 +22170,7 @@ int main(int argc, char *argv[])
 		  printf("ERROR: No output file specified.\n");
 		  return 1;
 	  }
-	
+	}  
 	
 	
 
@@ -21588,7 +22236,12 @@ int main(int argc, char *argv[])
 
 	
 	
-	  
+#ifdef DO_TIMING
+	timers[1] = gettime();
+#endif	
+ 
+	if (g_parallel_mode)
+	    my_bam_open(&g_single, bam_file_name);
 	
  
 	
@@ -21597,12 +22250,11 @@ int main(int argc, char *argv[])
 	if( g_tumor_sv >= 0 )  
 
 	{
-	  g_insert_mean = find_insert_mean(bam_file, &g_lseq, &g_insert_min_size, &g_insert_max_size);  
+	  if (g_one_chromosome < 0 || load_insert_mean(bam_file_name, &g_insert_mean, &g_lseq, &g_insert_min_size, &g_insert_max_size, &g_mapped_reads) <= 0) {  
 	  
-
-
-
-  
+	    g_insert_mean = find_insert_mean(bam_file, &g_lseq, &g_insert_min_size, &g_insert_max_size);
+	    save_insert_mean(bam_file_name, g_insert_mean, g_lseq, g_insert_min_size, g_insert_max_size, g_mapped_reads);  
+	  }  
 	}
 	
 	if( g_insert_mean < g_lseq )
@@ -21616,8 +22268,9 @@ int main(int argc, char *argv[])
 		g_one_base_window_size_total += 2*(m_a_loop + 1);
 	}
 	
-	
-  
+#ifdef DO_TIMING
+	timers[2] = gettime();  
+#endif	
 	printf("insert mean, insert minimum, insert maximum: %d %d %d\n", g_insert_mean, g_insert_min_size, g_insert_max_size);
 	printf("median read length: %d\n", g_lseq);
 	if( g_internal == 1 )  
@@ -21652,15 +22305,39 @@ int main(int argc, char *argv[])
 	
 	
 	
-	find_genome_length(fasta_handle);
-	
-
-
-  
-	
+	if (load_genome_info(fasta_file_name, fasta_handle) == 0) {  
+	    find_genome_length(fasta_handle);
+	    save_genome_info(fasta_file_name);  
+	}  
 	
 	
- 
+	for(m_a_loop=0;m_a_loop<g_chr_names_index;m_a_loop++)
+	{
+	  g_parallel_fasta_chr_index[m_a_loop] = m_a_loop;
+	}
+	if( g_one_chromosome < 0 ) 
+	{
+	  for(m_a_loop=0;m_a_loop<g_chr_names_index-1;m_a_loop++)
+	  {
+	    m_max_chr_len = g_chr_len[g_parallel_fasta_chr_index[m_a_loop]];
+	    m_max_chr = m_a_loop;
+	    for(m_b_loop=m_a_loop;m_b_loop<g_chr_names_index;m_b_loop++)
+	    {
+	      if( g_chr_len[g_parallel_fasta_chr_index[m_b_loop]] > m_max_chr_len )
+	      {
+		m_max_chr_len = g_chr_len[g_parallel_fasta_chr_index[m_b_loop]];
+		m_max_chr = m_b_loop;
+	      }
+	    }
+	    m_temp_chr = g_parallel_fasta_chr_index[m_a_loop];
+	    g_parallel_fasta_chr_index[m_a_loop] = g_parallel_fasta_chr_index[m_max_chr];
+	    g_parallel_fasta_chr_index[m_max_chr] = m_temp_chr;
+	  }
+	}
+	for(m_a_loop=0;m_a_loop<g_chr_names_index;m_a_loop++)
+	{
+	  printf("%ld fasta index %d\n", m_a_loop, g_parallel_fasta_chr_index[m_a_loop]);
+	}
 	
 
 	printf("mappable genome length: %ld\n", g_mappable_genome_length);
@@ -21668,7 +22345,9 @@ int main(int argc, char *argv[])
 	
 	
 	
-  
+#ifdef DO_TIMING
+	timers[3] = gettime();  
+#endif	
 		
 	
 	
@@ -21686,24 +22365,42 @@ int main(int argc, char *argv[])
 #endif
 
 	
-	  
+	if (g_parallel_mode)
+	    my_bam_close(&g_single);
+
+
+#ifdef DO_TIMING
+	timers[4] = gettime();
+#endif	
 	
 	fclose(fasta_handle);
 	
 	
 	
-	
-  
+#ifdef DO_TIMING
+	printf("%d-%d: GROM total runtime = %.3f   parellel = %d\n", g_one_chromosome, g_sub_child_number, gettime() - timers[0], g_parallel_mode);
+	if( g_internal == 1 )  
+	{
+	  printf("%d-%d: Init, read predictions and binom time = %.3f\n", g_one_chromosome, g_sub_child_number, timers[1]-timers[0]);
+	  printf("%d-%d: find_insert_mean total time = %.3f\n", g_one_chromosome, g_sub_child_number, timers[2]-timers[1]);
+	  printf("%d-%d: find_genome_length total time = %.3f\n", g_one_chromosome, g_sub_child_number, timers[3]-timers[2]);
+	  printf("%d-%d: find_disc_svs total time = %.3f\n", g_one_chromosome, g_sub_child_number, timers[4]-timers[3]);
+	  printf("\n");
+	  printf("%d-%d: chromosome processing times : ", g_one_chromosome, g_sub_child_number);
+	  for (ix = 0; ix < ccount; ix++) printf(" %.3f", timers[11+ix*2]-timers[10+ix*2]);
+	}
+	printf("\n");
+#endif	
 	
 	
 	
 	
 	char results_file_name_trim_ctx[1024];  
 
-	
-	
+	if( g_one_chromosome < 0 )
+	{
 	  long m_num_chr;
-	  
+	  char *m_target_name;
 	  
 	  
 	  int m_bam_name_len;  
@@ -21729,8 +22426,7 @@ int main(int argc, char *argv[])
 	  for(m_a_loop=0;m_a_loop<m_num_chr;m_a_loop++) 
 	  {
 	    
-	    char *m_target_name = bam_file->header->target_name[m_a_loop];
-	    
+	    m_target_name = bam_file->header->target_name[m_a_loop];
 	    m_bam_name_len = strlen(m_target_name);  
 	    if( g_internal == 1 )  
 	    {
@@ -22071,7 +22767,7 @@ int main(int argc, char *argv[])
 	  fclose(results_file_ctx_handle);
 	  samclose(bam_file);
 	  
-	
+	}
 	
 
 #ifdef DO_TIMING
