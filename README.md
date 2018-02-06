@@ -1,5 +1,5 @@
 # GROM
-Version 1.0.0
+Version 1.0.1
 
 
 
@@ -9,7 +9,7 @@ Version 1.0.0
 
 ### DESCRIPTION
 
-GROM detects a comprehensive range of variants, SNVs, indels (deletion and insertion), structural variants (deletion, duplication, insertion, inversion, translocation), and CNVs (deletion and duplication).  GROM integrates paired-end, split-read, and read depth information.  GROM is optimally designed for whole genome sequencing (Illumina paired-end or single-end) data aligned with BWA mem and has been used to analyze exome and RNA-seq data.  GROM has been tested with BWA, however we recommend using BWA mem since GROM utilizes BWA mem's split-read mapping information.  When analyzing single-end data, GROM's insertion, inversion, and translocation output will be very limited.  This is a common limitation of single-end sequencing analysis not limited to GROM.  GROM is capable of duplicate read filtering.  Duplicate read filtering is similar to Picard's MarkDuplicates with an exception that GROM does not consider soft-clipping of a read's mate.  This is due to the speed optimization of GROM ("thunder" in Russian), and GROM is "lightning" fast completing analysis many times faster than leading algorithms. When run single-threaded, GROM requires approximately 13 GB RAM for a human genome.  A simple multi-threading has been successfully tested but such parallel version is undergoing additional software development and will be released soon. Multi-threading will require 128 GB RAM for a human genome.
+GROM detects a comprehensive range of variants, SNVs, indels (deletion and insertion), structural variants (deletion, duplication, insertion, inversion, translocation), and CNVs (deletion and duplication).  GROM integrates paired-end, split-read, and read depth information.  GROM is optimally designed for whole genome sequencing (Illumina paired-end or single-end) data aligned with BWA mem and has been used to analyze exome and RNA-seq data.  GROM analysis is limited to SNVs and indels for exome and RNA-seq data.  GROM has been tested with BWA, however we recommend using BWA mem since GROM utilizes BWA mem's split-read mapping information.  When analyzing single-end data, GROM's insertion, inversion, and translocation output will be very limited.  This is a common limitation of single-end sequencing analysis not limited to GROM.  GROM is capable of duplicate read filtering.  Duplicate read filtering is similar to Picard's MarkDuplicates with an exception that GROM does not consider soft-clipping of a read's mate.  This is due to the speed optimization of GROM ("thunder" in Russian), and GROM is "lightning" fast completing analysis many times faster than leading algorithms. When run single-threaded, GROM requires approximately 13 GB RAM for a human genome.  Running GROM with 24-threads requires 128 GB RAM for a human genome.
 
 GROM outputs variant predictions in VCF-format.  Translocations are output to a separate file with the extension ".ctx.vcf" instead of ".vcf".
 
@@ -83,6 +83,11 @@ For genomes with ploidy not equal to 2, use '-p [ploidy].  For instance, if the 
 ```
 
 
+For multi-threading, use -P [processes].  [processes] indicates number of processes (chromosomes) to run simultaneously.  Each process requires 2 threads.  For instance, "-P 12" will run 12 processes (12 chromosomes) in parallel and require 24 threads.  Default is single-threaded.  Example of 24-threaded GROM:
+
+```
+./dist/GROM -P 12 -i [BAM file] -r [Reference file] -o [Output file]
+```
 
 
 ### Other parameters
@@ -245,25 +250,4 @@ Split-reads with gap or overlap greater than the threshold are not considered ev
 `-z Minimum split-read mapped length (each split) [default=30]`
 
 Split-reads less than the minimum may not support variants based on the split.  Split-reads may still support variants based on discordant pairs (paired-reads).
-
-
-*****DO NOT USE FOLLOWING PARAMETERS
-
-`-c Chromosome to analyze`
-
-Not tested. Reserved for further development.
-
-
-`-t Tumor file name`
-
-Not tested. Reserved for further development.
-
-
-*****DO NOT USE! PARALLEL VERSION BEING FINALIZED
-
-`-P Processes [default=0]`
-
-Indicates number of processes (chromosomes) to run simultaneously.  Each process requires 2 threads.  For instance, "-P 12" will run 12 processes (12 chromosomes) in parallel and require 24 threads.  Default is single-threaded.
-
-
 
